@@ -9,9 +9,10 @@ def main():
     p.add_argument('aaf')
     p.add_argument('plan')
     p.add_argument('--composition', help='Explicit CompositionMob MobID when more than one exists')
+    p.add_argument('--media-dir', help='Explicit relink directory; exact locator filename, no recursive search')
     args = p.parse_args()
     try:
-        plan = read_aaf(args.aaf, args.composition)
+        plan = read_aaf(args.aaf, args.composition, args.media_dir)
         with open(args.plan, 'x', encoding='utf-8') as out:
             json.dump(plan, out, ensure_ascii=False, indent=2)
         for warning in plan['warnings']:

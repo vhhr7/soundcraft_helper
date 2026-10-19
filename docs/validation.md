@@ -2,9 +2,9 @@
 
 ## Resultado y alcance
 
-Etapa funcional de importación AAF externa comprobada. Cinco pruebas Rust y nueve pruebas Python pasan. La CLI produce una sesión editable y portable con fuentes completas. SoundCraft abrió esa sesión, cargó los dos medios, extendió un clip hacia ambos handles y guardó/reabrió una copia.
+Etapa funcional de importación AAF externa comprobada. Cinco pruebas Rust y once pruebas Python pasan. La CLI produce una sesión editable y portable con fuentes completas. SoundCraft abrió esa sesión, cargó los dos medios, extendió un clip hacia ambos handles y guardó/reabrió una copia.
 
-Esto **no certifica SoundCraft para uso continuo en clase**. No se ha probado reproducción audible, interfaz del aula, latencia, grabación, plugins, sesiones largas, recuperación de fallos ni un archivo real de Resolve/Premiere/Pro Tools. Para la primera clase, usar la demo ensayada y una alternativa disponible; el importador y la estabilidad del DAW son dos validaciones diferentes.
+Esto **no certifica SoundCraft para uso continuo en clase**. No se ha probado reproducción audible, interfaz del aula, latencia, grabación, plugins, sesiones largas, recuperación de fallos ni compatibilidad general con todos los exportadores de Resolve/Premiere/Pro Tools. Para la primera clase, usar la demo ensayada y una alternativa disponible; el importador y la estabilidad del DAW son dos validaciones diferentes.
 
 ## Entorno y trazabilidad
 
@@ -23,7 +23,7 @@ La primera apertura mediante entrada AX no aplicó el cambio del campo de ruta: 
 | cargo build/test --locked | Pasa; 5 tests de biblioteca, sin tests omitidos |
 | cargo fmt --check | Pasa |
 | cargo clippy --locked --all-targets -- -D warnings | Pasa |
-| unittest Python | 9 pasan: AAF real binario sintético, rutas especiales, composición ambigua, rate fraccional, operación de ganancia rechazada, embebido rechazado, origen no cero, locator remoto, medios faltantes y E2E |
+| unittest Python | 11 pasan: AAF binario sintético, relink explícito, tasas de edición de fuente distintas de sample rate, rutas especiales, composición ambigua, rate fraccional, operación de ganancia rechazada, embebido rechazado, origen no cero, locator remoto, medios faltantes y E2E |
 | Posición/duración/offset | Valores exactos en muestras, tabla inferior |
 | Handles / medios | Copias CLI SHA256 idénticas a originales; 384000 frames por fuente, mono/estéreo |
 | Deriva temporal | 1000 cortes a 24000/1001 fps sobre 44.1 kHz: cada final coincide con inicio siguiente; final total 1839338 muestras. Sin acumular duración redondeada de cada frame |
@@ -73,3 +73,12 @@ La extensión se verificó mediante el comando real del motor de la aplicación,
 4. Extender por ambos lados hasta los límites de fuente disponibles. Escuchar y comparar impulsos/transitorios y contenido; distinguir handles entregados de audio que el editor no exportó.
 5. Probar un medio faltante y un locator que requiera relink; debe fallar claramente y conservar originales. Añadir regression fixture antes de ampliar el lector.
 6. Ensayar 30–60 minutos con la misma interfaz del aula, reproducir/editar/guardar/reabrir varias veces y revisar logs. Anotar versión/binario y cualquier fallo del DAW por separado de los errores del importador. Sólo después decidir si usarlo como herramienta principal en clase.
+
+
+## Ampliación con entrega real externa
+
+Se importó una entrega real con 22 slots de audio, 124 SourceClip y 124 WAV mono PCM 24-bit a 48 kHz. La composición y los slots de fuente usan 24000/1001 fps. Los locators originales apuntaban a una carpeta antigua: se resolvieron mediante `--media-dir`, dejando el AAF y los WAV originales intactos. Los nombres de los slots de pista estaban vacíos: se asignaron Audio 1–22 con advertencias.
+
+Se compararon en la API de SoundCraft los 124 inicios, duraciones y offsets con la sesión generada, y se confirmó `loaded=true` para todos los medios. Las 124 copias de fuentes de la CLI son byte-idénticas a los originales. Se extendió por ambos bordes un clip aislado, se restauró su ventana, se guardó una copia nativa y se reabrió sin perder los valores ni el timecode. Un intento de extender otro clip encontró el límite de su vecino contiguo; no se contó como fallo de handles.
+
+La entrega y sus resultados se mantienen sólo en `local-tests/` (ignorado por Git), sin agregar audio del usuario al repositorio. La captura fue revisada y el montaje quedó abierto para inspección. Todavía falta la comparación independiente en Pro Tools y la escucha; la coincidencia contra el plan no demuestra por sí sola equivalencia con el editor de origen.

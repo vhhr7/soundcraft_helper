@@ -20,7 +20,7 @@ No se genera el formato de sesión a mano. Session::to_json serializa usando los
 ## Estado por etapas
 
 1. Implementación mínima: hecha y probada automáticamente con AAF sintéticos binarios.
-2. Apertura y edición: hecha en la instalación nativa 0.8.0; modelo compilado 0.9.0. Falta ejecutar una build completa 0.9.0 y comparar un AAF de un editor real.
+2. Apertura y edición: hecha en la instalación nativa 0.8.0; modelo compilado 0.9.0. Un AAF real de 22 pistas/124 clips también se abrió y pasó la comprobación de medios/offsets, edición de handles y copia/reapertura. Falta ejecutar una build completa 0.9.0 y comparar con Pro Tools.
 3. Menú de importación: pendiente. No se ha parcheado el motor ni la interfaz de upstream con una dependencia Python no empaquetada. La validación de un subconjunto sintético no resuelve el contrato pure-Rust, el acceso seguro a archivos ni los formatos de exportación reales.
 4. Documentación, fixture y cambios revisables: preparados en este repo. El borrador es para revisar la base, no afirma que AAF esté resuelto en SoundCraft.
 

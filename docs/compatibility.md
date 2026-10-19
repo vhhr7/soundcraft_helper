@@ -31,15 +31,15 @@ La elección AAF permite probar archivos binarios y fuentes reales con una depen
 
 | Elemento | Comportamiento actual |
 |---|---|
-| Pistas y orden | Slots de sonido en el orden de composición; nombres preservados, incluidos duplicados |
+| Pistas y orden | Slots de sonido en el orden de composición; nombres preservados, incluidos duplicados. SlotName vacío: Audio + PhysicalTrackNumber/SlotID con advertencia |
 | Clips | SourceClip directos y Sequence plana con SourceClip/Filler; tiempos y offsets racionales; nombres de Mob referenciado (no metadatos de nombres específicos de cada editor) |
 | Fuentes / handles | WAV PCM local externo con WAVEDescriptor (no PCMDescriptor), completo, copiado sin reconsolidar; clip = ventana sobre SourceId. Handles limitados al archivo efectivamente entregado |
 | Mono / estéreo | WAV mono e interleaved estéreo; no pairing de archivos L/R ni selección PhysicalTrackNumber |
-| Frecuencia de muestreo | Una frecuencia real común; discrepancia archivo/descriptor/edit rate de fuente o mezcla de frecuencias produce error. No hay resampling |
+| Frecuencia de muestreo | Una frecuencia real común; discrepancia de sample rate entre archivo y descriptor o mezcla de frecuencias produce error. El edit rate del slot fuente puede ser distinto del sample rate; sus offsets se convierten desde su propia tasa. No hay resampling |
 | Tiempos | Segundos racionales con i128 en Rust; cada inicio/final redondeado al más cercano, empates positivos hacia arriba. Duración = final redondeado − inicio redondeado |
 | Cadena de fuentes | SourceClip → MasterMob(s) de un solo SourceClip → SourceMob WAV; suma offsets y detecta ciclos. Secuencias dentro de un MasterMob se rechazan |
 | Inicio / frame rate | Un slot Timecode directo de composición con Origin=0; tasas de FrameRate del modelo, incluido drop válido. Sin Timecode: 0 y 30 fps con advertencia. Orígenes no cero se rechazan |
-| Archivos faltantes | Error que identifica el archivo y locator; no genera sesión parcial deliberadamente ni relinka por coincidencias |
+| Archivos faltantes | Error que identifica el archivo y locator; no genera sesión parcial deliberadamente. `--media-dir` permite relink explícito por nombre exacto con registro en advertencias |
 | Rutas | file URI local o ruta relativa al AAF, percent-decoding; espacios, ñ, á y # escapado probados. HTTP/SMB y hosts remotos rechazados; locators múltiples se consideran ambiguos |
 | Ganancia/fades/transiciones | No implementados. OperationGroup (incluida ganancia) y Transition abortan; no aplana el efecto ni sustituye por audio procesado |
 | Medios embebidos | Detectados en fuente referenciada y rechazados; no extracción todavía |

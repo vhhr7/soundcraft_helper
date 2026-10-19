@@ -42,10 +42,14 @@ def locator_path(url, base):
     return (p if p.is_absolute() else base / p).resolve()
 
 
-def read_aaf(path, composition=None):
+def read_aaf(path, composition=None, media_dir=None):
     path = Path(path).resolve()
     if not path.is_file() or path.stat().st_size > MAX_AAF_BYTES:
         raise ImportFailure("AAF missing, not a regular file, or above 512 MiB")
+    if media_dir is not None:
+        media_dir = Path(media_dir).resolve()
+        if not media_dir.is_dir():
+            raise ImportFailure(f"Media directory not found: {media_dir}")
     with aaf2.open(str(path), "r") as f:
         comps = list(f.content.compositionmobs())
         if composition is not None:
@@ -82,14 +86,23 @@ def read_aaf(path, composition=None):
                 if len(locs) != 1:
                     raise ImportFailure(f"Expected one unambiguous WAV locator: {mob.name}")
                 source_path = locator_path(locs[0], path.parent)
+                if media_dir is not None:
+                    # Explicit opt-in only: exact filename, no recursive/fuzzy matching.
+                    chosen = media_dir / source_path.name
+                    resolved = chosen.resolve()
+                    if resolved.parent != media_dir:
+                        raise ImportFailure(f"Relink escapes media directory: {chosen}")
+                    if chosen != source_path:
+                        plan['warnings'].append(f"Relinked {source_path} -> {resolved}")
+                    source_path = resolved
                 if not source_path.is_file():
                     raise ImportFailure(f"Missing media: {source_path}; locator={locs[0]}")
                 with wave.open(str(source_path), 'rb') as w:
                     sr, channels, frames = w.getframerate(), w.getnchannels(), w.getnframes()
                     if channels not in (1, 2) or w.getcomptype() != 'NONE':
                         raise ImportFailure("Only mono/stereo PCM WAV supported")
-                if Fraction(desc['SampleRate'].value) != sr or rr != sr:
-                    raise ImportFailure(f"Descriptor/file/edit sample rates differ: {mob.name}")
+                if Fraction(desc['SampleRate'].value) != sr:
+                    raise ImportFailure(f"Descriptor/file sample rates differ: {mob.name}")
                 if desc['Length'].value != frames:
                     raise ImportFailure(f"Descriptor/file lengths differ: {mob.name}")
                 # Full interleaved WAV only: a selected physical channel needs a channel map
@@ -131,7 +144,11 @@ def read_aaf(path, composition=None):
             if slot.media_kind != 'Sound':
                 plan['warnings'].append(f"Skipped non-audio slot {slot.slot_id}: {slot.media_kind}")
                 continue
-            track = dict(name=slot.name or f"Audio {slot.slot_id}", channels=1, clips=[])
+            physical = slot['PhysicalTrackNumber'].value if 'PhysicalTrackNumber' in slot else None
+            fallback_name = f"Audio {physical if physical is not None else slot.slot_id}"
+            track = dict(name=slot.name or fallback_name, channels=1, clips=[])
+            if not slot.name:
+                plan['warnings'].append(f"Unnamed AAF slot {slot.slot_id}: assigned {fallback_name}")
             items = list(seg.components) if isinstance(seg, components.Sequence) else [seg]
             cursor = 0
             formats = set()

@@ -16,6 +16,6 @@ Validation performed:
 
 Not supported: OMF, embedded-media extraction, split stereo/channel selection, mixed sample rates/resampling, MXF/AIFF, gain/fades/transitions/effects, selectors, nested editorial sequences, timewarp, arbitrary slot origins, plugins, routing or automation. Non-audio slots and unsupported metadata are reported as outside scope. Producer-specific clip naming and gain/fade encodings need real-world fixtures; no interchange equivalence is claimed.
 
-No real-user AAF/Pro Tools comparison, audible playback check, full current-version UI build, long-session testing or classroom stability certification has been completed. This is a tested base for further work and must not close the whole interchange gap.
+A real external-media AAF (22 tracks, 124 clips/sources) was also imported and inspected in SoundCraft after explicit filename relink; source slot edit rates are distinct from audio sample rates. All clip coordinates survived native save-copy/reopen. No independent Pro Tools comparison, audible playback check, full current-version UI build, long-session testing or classroom stability certification has been completed. This is a tested base for further work and must not close the whole interchange gap.
 
 Before a future upstream PR: re-check open work and craftrules, obtain the contributor's preferred optional credit once, run upstream gates, and update attribution/progress documentation. No PR has been published and no maintainer has been contacted.

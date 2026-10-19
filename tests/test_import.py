@@ -49,6 +49,55 @@ class ImportTests(unittest.TestCase):
         self.assertEqual(p['tracks'][1]['clips'][0]['end'], [5, 1])
         self.assertIn('#', p['sources'][0]['path'])
 
+    def test_explicit_relink_by_filename(self):
+        def change(f, c):
+            for mob in f.content.sourcemobs():
+                locator = mob.descriptor['Locator'].value[0]
+                filename = locator['URLString'].value
+                locator['URLString'].value = 'file:///missing/old/location/' + filename
+        self.change(change)
+        with self.assertRaisesRegex(ImportFailure, 'Missing media'):
+            read_aaf(self.aaf)
+        p = read_aaf(self.aaf, media_dir=self.case)
+        self.assertEqual(len(p['sources']), 2)
+        self.assertTrue(any(w.startswith('Relinked ') for w in p['warnings']))
+        self.assertTrue(all(Path(m['path']).parent == self.case.resolve() for m in p['sources']))
+        missing = self.case / 'empty media'
+        missing.mkdir()
+        with self.assertRaisesRegex(ImportFailure, 'Missing media'):
+            read_aaf(self.aaf, media_dir=missing)
+
+    def test_frame_based_file_source_and_nested_offsets(self):
+        def change(f, c):
+            for m in f.content.mastermobs():
+                slot = m.slots[0]
+                slot.edit_rate = '24000/1001'
+                slot.segment.start = 12
+                slot.segment.length = 180
+            for m in f.content.sourcemobs():
+                m.slots[0].edit_rate = '24000/1001'
+                m.slots[0].segment.length = 191
+            # These starts address MasterMob frames, while component lengths stay in
+            # the composition's 25 fps units and file metadata remains 48000 Hz.
+            c.slots[0].segment.components[1].start = 13
+            c.slots[0].segment.components[3].start = 60
+            c.slots[1].segment.components[0].start = 24
+        self.change(change)
+        p = read_aaf(self.aaf)
+        self.assertEqual(p['sample_rate'], 48000)
+        self.assertEqual(p['tracks'][0]['clips'][0]['offset'], [1001, 960])
+        self.assertEqual(p['tracks'][1]['clips'][0]['offset'], [3003, 2000])
+        # Verify the same normalized plan through the real Rust constructor.
+        plan = self.case / 'frame-plan.json'
+        plan.write_text(json.dumps(p))
+        out = self.case / 'frame-session'
+        result = subprocess.run([str(BINARY), str(plan), str(out)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        s = json.loads((out / 'session.scraft').read_text())
+        clip = s['tracks'][0]['playlists'][0]['clips'][0]
+        self.assertEqual((clip['start'], clip['length'], clip['content']['Audio']['offset']),
+                         (48000, 96000, 50050))
+
     def test_missing_media_explicit(self):
         (self.case / 'Diálogo á #1.wav').unlink()
         with self.assertRaisesRegex(ImportFailure, 'Missing media'):

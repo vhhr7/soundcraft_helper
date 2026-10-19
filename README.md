@@ -2,7 +2,7 @@
 
 Primera etapa funcional, en la rama local `feat/aaf-import`. Lee un subconjunto de AAF reales (binarios CFB), construye una `soundcraft_model::Session` con el módulo Rust reutilizable y escribe una sesión `.scraft` portable con sus WAV completos. **No consolida pistas**: cada corte sigue siendo un clip con offset sobre la fuente.
 
-Validado con AAF sintético original: 2 pistas mono/estéreo, 3 clips, silencios, offsets encadenados y handles. La sesión abrió en SoundCraft 0.8.0; la aplicación extendió ambos bordes de un clip, guardó una copia y la reabrió con los medios cargados. No se ha comparado todavía un AAF real con Pro Tools ni comprobado reproducción audible o estabilidad durante una clase.
+Validado con AAF sintético original: 2 pistas mono/estéreo, 3 clips, silencios, offsets encadenados y handles. También se importó y abrió un AAF real con 22 pistas, 124 clips y 124 WAV externos mono, usando relink explícito. La sesión abrió en SoundCraft 0.8.0; la aplicación extendió ambos bordes de un clip, guardó una copia y la reabrió con los medios cargados. No se ha comparado todavía el AAF real con Pro Tools ni comprobado reproducción audible o estabilidad durante una clase.
 
 ## Preparar y compilar en macOS
 
@@ -58,6 +58,15 @@ PYTHONPATH=python .venv/bin/python -m soundcraft_aaf \
   '/ruta/montaje.aaf' '/tmp/montaje-plan.json' --composition 'urn:smpte:umid:...'
 ./target/debug/plan-to-session '/tmp/montaje-plan.json' '/ruta/Sesión nueva'
 ```
+
+Si el AAF conserva locators de una ubicación antigua, indicar explícitamente la carpeta que contiene los medios:
+
+```sh
+./scripts/import-aaf.sh '/ruta/montaje.aaf' '/ruta/Sesión nueva' \
+  --media-dir '/ruta/carpeta de WAV'
+```
+
+`--media-dir` busca únicamente el nombre exacto de cada locator dentro de esa carpeta, sin búsqueda recursiva ni coincidencias aproximadas. El relink queda registrado en `import-report.json`. Los slots fuente pueden tener una tasa de edición distinta del sample rate: los offsets usan la primera y los WAV se validan contra el segundo.
 
 El plan debe ser nuevo y no contiene audio. La biblioteca Rust `build_session(Plan)` no ejecuta procesos ni accede al disco: es la misma que usa la CLI. El adaptador Python sólo lee AAF y emite tiempos racionales; **no escribe JSON de SoundCraft**. El ejecutable Rust verifica metadatos contra los WAV antes de construir y copiar. Otros consumidores de la biblioteca deben hacer esa verificación y aplicar sus propias restricciones de acceso a archivos.
 
