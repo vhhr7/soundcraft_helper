@@ -1,0 +1,6 @@
+.venv/
+target/
+__pycache__/
+*.pyc
+.DS_Store
+docs/app-validation/roundtrip/

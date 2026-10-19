@@ -1,0 +1,23 @@
+{
+  "warnings": [
+    "AAF subset: plugins, routing, automation and metadata are not transferred.",
+    "Clip gain, fades, transitions, selectors, nested sequences and embedded media are unsupported; encountered editorial structures fail."
+  ],
+  "handles": [
+    {
+      "clip": "Diálogo á #1",
+      "before": 48000,
+      "after": 240000
+    },
+    {
+      "clip": "Diálogo á #1",
+      "before": 168000,
+      "after": 168000
+    },
+    {
+      "clip": "Ambiente estéreo",
+      "before": 72000,
+      "after": 72000
+    }
+  ]
+}

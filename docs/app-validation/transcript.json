@@ -1,0 +1,686 @@
+[
+  {
+    "request": {
+      "id": 1,
+      "method": "session.inspect",
+      "params": {
+        "detail": "full"
+      }
+    },
+    "response": {
+      "id": 1,
+      "ok": true,
+      "result": {
+        "bit_depth": "Int24",
+        "busses": [],
+        "dirty": false,
+        "edit_mode": "Slip",
+        "frame_rate": "25",
+        "grid": "1/16 note",
+        "groups": [],
+        "length_samples": 240000,
+        "main_format": "Stereo",
+        "markers": [],
+        "meter": [
+          {
+            "denominator": 4,
+            "numerator": 4,
+            "tick": 0
+          }
+        ],
+        "name": "Clase AAF — cortes y handles",
+        "nudge": "1.000 sec",
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/demo/Sesión SoundCraft/session.scraft",
+        "redo": null,
+        "sample_rate": 48000,
+        "selection": {
+          "clips": [],
+          "end": 0,
+          "start": 0,
+          "tracks": []
+        },
+        "sources": [
+          {
+            "channels": 1,
+            "frames": 384000,
+            "id": 1,
+            "loaded": true,
+            "name": "Diálogo á #1",
+            "path": "Audio Files/source-1.wav"
+          },
+          {
+            "channels": 2,
+            "frames": 384000,
+            "id": 2,
+            "loaded": true,
+            "name": "Ambiente estéreo",
+            "path": "Audio Files/source-2.wav"
+          }
+        ],
+        "tempo": [
+          {
+            "bpm": 120.0,
+            "tick": 0
+          }
+        ],
+        "tool": "Smart",
+        "tracks": [
+          {
+            "automation": [],
+            "automation_mode": "read",
+            "clips": [
+              {
+                "end": 144000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 4,
+                "length": 96000,
+                "locked": false,
+                "muted": false,
+                "name": "Diálogo á #1",
+                "offset": 48000,
+                "source": 1,
+                "start": 48000,
+                "start_time": "0:01.000"
+              },
+              {
+                "end": 240000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 5,
+                "length": 48000,
+                "locked": false,
+                "muted": false,
+                "name": "Diálogo á #1",
+                "offset": 168000,
+                "source": 1,
+                "start": 192000,
+                "start_time": "0:04.000"
+              }
+            ],
+            "format": "Mono",
+            "height": "medium",
+            "hidden": false,
+            "id": 3,
+            "inactive": false,
+            "input": "None",
+            "inserts": [],
+            "kind": "audio",
+            "mute": false,
+            "name": "01 Diálogo",
+            "output": "Main",
+            "pan": [
+              0.0
+            ],
+            "playlist": "01 Diálogo",
+            "playlists": 1,
+            "record_arm": false,
+            "sends": [],
+            "solo": false,
+            "surround": null,
+            "view": "waveform",
+            "volume_db": 0.0
+          },
+          {
+            "automation": [],
+            "automation_mode": "read",
+            "clips": [
+              {
+                "end": 240000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 7,
+                "length": 240000,
+                "locked": false,
+                "muted": false,
+                "name": "Ambiente estéreo",
+                "offset": 72000,
+                "source": 2,
+                "start": 0,
+                "start_time": "0:00.000"
+              }
+            ],
+            "format": "Stereo",
+            "height": "medium",
+            "hidden": false,
+            "id": 6,
+            "inactive": false,
+            "input": "None",
+            "inserts": [],
+            "kind": "audio",
+            "mute": false,
+            "name": "02 Ambiente estéreo",
+            "output": "Main",
+            "pan": [
+              -1.0,
+              1.0
+            ],
+            "playlist": "02 Ambiente estéreo",
+            "playlists": 1,
+            "record_arm": false,
+            "sends": [],
+            "solo": false,
+            "surround": null,
+            "view": "waveform",
+            "volume_db": 0.0
+          }
+        ],
+        "transport": {
+          "playing": false,
+          "position": 0,
+          "recording": false
+        },
+        "undo": null,
+        "zoom": {
+          "samples_per_px": 1024.0,
+          "scroll": 0
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 2,
+      "method": "engine.execute",
+      "params": {
+        "command": "view.zoom_fit",
+        "params": {
+          "width_px": 1600
+        }
+      }
+    },
+    "response": {
+      "id": 2,
+      "ok": true,
+      "result": {}
+    }
+  },
+  {
+    "request": {
+      "id": 3,
+      "method": "ui.screenshot",
+      "params": {
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/montage.png"
+      }
+    },
+    "response": {
+      "id": 3,
+      "ok": true,
+      "result": {
+        "height": 921,
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/montage.png",
+        "width": 1512
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 4,
+      "method": "engine.execute",
+      "params": {
+        "command": "edit.trim_clip",
+        "params": {
+          "clip": 4,
+          "start": 24000,
+          "end": 168000
+        }
+      }
+    },
+    "response": {
+      "id": 4,
+      "ok": true,
+      "result": {
+        "end": 168000,
+        "start": 24000
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 5,
+      "method": "session.inspect",
+      "params": {
+        "detail": "full"
+      }
+    },
+    "response": {
+      "id": 5,
+      "ok": true,
+      "result": {
+        "bit_depth": "Int24",
+        "busses": [],
+        "dirty": true,
+        "edit_mode": "Slip",
+        "frame_rate": "25",
+        "grid": "1/16 note",
+        "groups": [],
+        "length_samples": 240000,
+        "main_format": "Stereo",
+        "markers": [],
+        "meter": [
+          {
+            "denominator": 4,
+            "numerator": 4,
+            "tick": 0
+          }
+        ],
+        "name": "Clase AAF — cortes y handles",
+        "nudge": "1.000 sec",
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/demo/Sesión SoundCraft/session.scraft",
+        "redo": null,
+        "sample_rate": 48000,
+        "selection": {
+          "clips": [],
+          "end": 0,
+          "start": 0,
+          "tracks": []
+        },
+        "sources": [
+          {
+            "channels": 1,
+            "frames": 384000,
+            "id": 1,
+            "loaded": true,
+            "name": "Diálogo á #1",
+            "path": "Audio Files/source-1.wav"
+          },
+          {
+            "channels": 2,
+            "frames": 384000,
+            "id": 2,
+            "loaded": true,
+            "name": "Ambiente estéreo",
+            "path": "Audio Files/source-2.wav"
+          }
+        ],
+        "tempo": [
+          {
+            "bpm": 120.0,
+            "tick": 0
+          }
+        ],
+        "tool": "Smart",
+        "tracks": [
+          {
+            "automation": [],
+            "automation_mode": "read",
+            "clips": [
+              {
+                "end": 168000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 4,
+                "length": 144000,
+                "locked": false,
+                "muted": false,
+                "name": "Diálogo á #1",
+                "offset": 24000,
+                "source": 1,
+                "start": 24000,
+                "start_time": "0:00.500"
+              },
+              {
+                "end": 240000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 5,
+                "length": 48000,
+                "locked": false,
+                "muted": false,
+                "name": "Diálogo á #1",
+                "offset": 168000,
+                "source": 1,
+                "start": 192000,
+                "start_time": "0:04.000"
+              }
+            ],
+            "format": "Mono",
+            "height": "medium",
+            "hidden": false,
+            "id": 3,
+            "inactive": false,
+            "input": "None",
+            "inserts": [],
+            "kind": "audio",
+            "mute": false,
+            "name": "01 Diálogo",
+            "output": "Main",
+            "pan": [
+              0.0
+            ],
+            "playlist": "01 Diálogo",
+            "playlists": 1,
+            "record_arm": false,
+            "sends": [],
+            "solo": false,
+            "surround": null,
+            "view": "waveform",
+            "volume_db": 0.0
+          },
+          {
+            "automation": [],
+            "automation_mode": "read",
+            "clips": [
+              {
+                "end": 240000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 7,
+                "length": 240000,
+                "locked": false,
+                "muted": false,
+                "name": "Ambiente estéreo",
+                "offset": 72000,
+                "source": 2,
+                "start": 0,
+                "start_time": "0:00.000"
+              }
+            ],
+            "format": "Stereo",
+            "height": "medium",
+            "hidden": false,
+            "id": 6,
+            "inactive": false,
+            "input": "None",
+            "inserts": [],
+            "kind": "audio",
+            "mute": false,
+            "name": "02 Ambiente estéreo",
+            "output": "Main",
+            "pan": [
+              -1.0,
+              1.0
+            ],
+            "playlist": "02 Ambiente estéreo",
+            "playlists": 1,
+            "record_arm": false,
+            "sends": [],
+            "solo": false,
+            "surround": null,
+            "view": "waveform",
+            "volume_db": 0.0
+          }
+        ],
+        "transport": {
+          "playing": false,
+          "position": 0,
+          "recording": false
+        },
+        "undo": "Trim Clip",
+        "zoom": {
+          "samples_per_px": 945.0,
+          "scroll": 0
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 6,
+      "method": "engine.execute",
+      "params": {
+        "command": "edit.trim_clip",
+        "params": {
+          "clip": 4,
+          "start": 48000,
+          "end": 144000
+        }
+      }
+    },
+    "response": {
+      "id": 6,
+      "ok": true,
+      "result": {
+        "end": 144000,
+        "start": 48000
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 7,
+      "method": "engine.execute",
+      "params": {
+        "command": "session.save_copy",
+        "params": {
+          "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/roundtrip/roundtrip.scraft"
+        }
+      }
+    },
+    "response": {
+      "id": 7,
+      "ok": true,
+      "result": {
+        "audio_files_written": 2,
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/roundtrip/roundtrip.scraft"
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 8,
+      "method": "engine.execute",
+      "params": {
+        "command": "session.open",
+        "params": {
+          "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/roundtrip/roundtrip.scraft"
+        }
+      }
+    },
+    "response": {
+      "id": 8,
+      "ok": true,
+      "result": {
+        "missing": [],
+        "name": "roundtrip",
+        "tracks": 2
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 9,
+      "method": "session.inspect",
+      "params": {
+        "detail": "full"
+      }
+    },
+    "response": {
+      "id": 9,
+      "ok": true,
+      "result": {
+        "bit_depth": "Int24",
+        "busses": [],
+        "dirty": false,
+        "edit_mode": "Slip",
+        "frame_rate": "25",
+        "grid": "1/16 note",
+        "groups": [],
+        "length_samples": 240000,
+        "main_format": "Stereo",
+        "markers": [],
+        "meter": [
+          {
+            "denominator": 4,
+            "numerator": 4,
+            "tick": 0
+          }
+        ],
+        "name": "roundtrip",
+        "nudge": "1.000 sec",
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/roundtrip/roundtrip.scraft",
+        "redo": null,
+        "sample_rate": 48000,
+        "selection": {
+          "clips": [],
+          "end": 0,
+          "start": 0,
+          "tracks": []
+        },
+        "sources": [
+          {
+            "channels": 1,
+            "frames": 384000,
+            "id": 1,
+            "loaded": true,
+            "name": "Diálogo á #1",
+            "path": "Audio Files/Diálogo á _1.wav"
+          },
+          {
+            "channels": 2,
+            "frames": 384000,
+            "id": 2,
+            "loaded": true,
+            "name": "Ambiente estéreo",
+            "path": "Audio Files/Ambiente estéreo.wav"
+          }
+        ],
+        "tempo": [
+          {
+            "bpm": 120.0,
+            "tick": 0
+          }
+        ],
+        "tool": "Smart",
+        "tracks": [
+          {
+            "automation": [],
+            "automation_mode": "read",
+            "clips": [
+              {
+                "end": 144000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 4,
+                "length": 96000,
+                "locked": false,
+                "muted": false,
+                "name": "Diálogo á #1",
+                "offset": 48000,
+                "source": 1,
+                "start": 48000,
+                "start_time": "0:01.000"
+              },
+              {
+                "end": 240000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 5,
+                "length": 48000,
+                "locked": false,
+                "muted": false,
+                "name": "Diálogo á #1",
+                "offset": 168000,
+                "source": 1,
+                "start": 192000,
+                "start_time": "0:04.000"
+              }
+            ],
+            "format": "Mono",
+            "height": "medium",
+            "hidden": false,
+            "id": 3,
+            "inactive": false,
+            "input": "None",
+            "inserts": [],
+            "kind": "audio",
+            "mute": false,
+            "name": "01 Diálogo",
+            "output": "Main",
+            "pan": [
+              0.0
+            ],
+            "playlist": "01 Diálogo",
+            "playlists": 1,
+            "record_arm": false,
+            "sends": [],
+            "solo": false,
+            "surround": null,
+            "view": "waveform",
+            "volume_db": 0.0
+          },
+          {
+            "automation": [],
+            "automation_mode": "read",
+            "clips": [
+              {
+                "end": 240000,
+                "fade_in": 0,
+                "fade_out": 0,
+                "gain_db": 0.0,
+                "id": 7,
+                "length": 240000,
+                "locked": false,
+                "muted": false,
+                "name": "Ambiente estéreo",
+                "offset": 72000,
+                "source": 2,
+                "start": 0,
+                "start_time": "0:00.000"
+              }
+            ],
+            "format": "Stereo",
+            "height": "medium",
+            "hidden": false,
+            "id": 6,
+            "inactive": false,
+            "input": "None",
+            "inserts": [],
+            "kind": "audio",
+            "mute": false,
+            "name": "02 Ambiente estéreo",
+            "output": "Main",
+            "pan": [
+              -1.0,
+              1.0
+            ],
+            "playlist": "02 Ambiente estéreo",
+            "playlists": 1,
+            "record_arm": false,
+            "sends": [],
+            "solo": false,
+            "surround": null,
+            "view": "waveform",
+            "volume_db": 0.0
+          }
+        ],
+        "transport": {
+          "playing": false,
+          "position": 0,
+          "recording": false
+        },
+        "undo": null,
+        "zoom": {
+          "samples_per_px": 945.0,
+          "scroll": 0
+        }
+      }
+    }
+  },
+  {
+    "request": {
+      "id": 10,
+      "method": "ui.screenshot",
+      "params": {
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/reopened.png"
+      }
+    },
+    "response": {
+      "id": 10,
+      "ok": true,
+      "result": {
+        "height": 921,
+        "path": "/Users/victorherrera/Documents/Develop/soundcraft_helper/helper-aaf/docs/app-validation/reopened.png",
+        "width": 1512
+      }
+    }
+  }
+]
