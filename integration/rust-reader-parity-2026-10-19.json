@@ -1,0 +1,28 @@
+{
+  "date": "2026-10-19",
+  "rust_reader": "crates/interchange/src/aaf.rs (cfb 0.15.0)",
+  "python_reader": "python/soundcraft_aaf/reader.py (pyaaf2 1.7.1)",
+  "method": "Both readers run with the same --media-dir; plans compared as normalized JSON (all keys, values and order of tracks/clips/sources/warnings).",
+  "identical_plans": [
+    {"case": "synthetic fixture", "tracks": 2, "clips": 3, "sources": 2},
+    {"case": "real-world external-WAV AAF (not redistributed)", "tracks": 22, "clips": 124, "sources": 124, "warnings": 148},
+    {"case": "relink from stale absolute locators"},
+    {"case": "frame-based master/source slots with nested offsets"},
+    {"case": "24000/1001 composition rate"},
+    {"case": "30000/1001 drop-frame timecode"},
+    {"case": "unnamed slot fallback name"},
+    {"case": "source window start moved inside master"}
+  ],
+  "both_refuse": [
+    "non-local (https) locator",
+    "gain OperationGroup in a sequence",
+    "embedded essence",
+    "nonzero slot origin",
+    "two composition mobs without explicit choice",
+    "missing media file"
+  ],
+  "known_differences": [
+    "Error texts name classes (e.g. 'TimelineMobSlot 1') instead of Python object reprs.",
+    "WAV headers are parsed by a bounded RIFF chunk reader; WAVE_FORMAT_EXTENSIBLE with PCM subtype is accepted (Python 3.10 wave rejects it)."
+  ]
+}

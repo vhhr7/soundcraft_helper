@@ -1,0 +1,2443 @@
+From e61391768bac372e2fb08bd5da9dea7b01a536c5 Mon Sep 17 00:00:00 2001
+From: Vic Herrera <126992509+vhhr7@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 18:42:37 -0500
+Subject: [PATCH] Read AAF in pure Rust instead of an external Python reader
+
+The interchange crate now reads the AAF object model directly from structured
+storage with the cfb crate (MIT): properties streams, strong reference
+vectors/sets and dictionary weak references. It keeps the same Plan contract
+and rules as the earlier pyaaf2 prototype and produced identical plans on the
+synthetic fixture, twelve edited variants and a real 22-track/124-edit AAF.
+
+The engine resolves locators only to files named in the chosen media folder,
+checks file_access and reads WAV headers without loading samples. The
+SOUNDCRAFT_AAF_PYTHON/READER subprocess, its timeout and output limits are gone.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ Cargo.lock                                    |  12 +
+ Cargo.toml                                    |   2 +
+ crates/engine/src/io.rs                       | 129 +--
+ crates/engine/tests/aaf_import.rs             |  61 ++
+ .../tests/fixtures/synthetic-two-tracks.aaf   | Bin 0 -> 462848 bytes
+ crates/interchange/Cargo.toml                 |   1 +
+ crates/interchange/README.md                  |  17 +-
+ crates/interchange/src/aaf.rs                 | 917 ++++++++++++++++++
+ crates/interchange/src/lib.rs                 |   2 +
+ crates/ui-egui/src/aaf_import.rs              |   2 +-
+ 10 files changed, 1081 insertions(+), 62 deletions(-)
+ create mode 100644 crates/engine/tests/fixtures/synthetic-two-tracks.aaf
+ create mode 100644 crates/interchange/src/aaf.rs
+
+diff --git a/Cargo.lock b/Cargo.lock
+index 770b014..40d4e13 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -657,6 +657,17 @@ dependencies = [
+  "nom",
+ ]
+ 
++[[package]]
++name = "cfb"
++version = "0.15.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0f13298d9178622b7916ec5d01d470425c04273c8ed07e87b1c38b34c4f4612b"
++dependencies = [
++ "fnv",
++ "uuid",
++ "web-time",
++]
++
+ [[package]]
+ name = "cfg-if"
+ version = "1.0.5"
+@@ -3683,6 +3694,7 @@ dependencies = [
+ name = "soundcraft-interchange"
+ version = "0.9.0"
+ dependencies = [
++ "cfb",
+  "serde",
+  "serde_json",
+  "soundcraft-audio-io",
+diff --git a/Cargo.toml b/Cargo.toml
+index 6448508..869bdab 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,6 +39,8 @@ proptest = "1"
+ # audio
+ symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
+ rustfft = "6"
++# AAF interchange: Compound File Binary (structured storage) container reader.
++cfb = "0.15"
+ # Session bundles (one file holding a session and its audio, for the browser): stored entries only.
+ zip = { version = "9", default-features = false }
+ cpal = "0.16"
+diff --git a/crates/engine/src/io.rs b/crates/engine/src/io.rs
+index 3a55546..ef762ac 100644
+--- a/crates/engine/src/io.rs
++++ b/crates/engine/src/io.rs
+@@ -2203,76 +2203,95 @@ pub(crate) fn read_interchange_file(path: &Path, limit: u64) -> Result<Vec<u8>>
+     Ok(bytes)
+ }
+ 
+-/// The optional AAF reader is isolated from construction of the session. It receives only a
+-/// user-chosen local file and relink folder; Python enforces that every referenced WAV is in it.
++/// Reads an AAF with the pure-Rust interchange reader. Only the user-chosen AAF and media folder
++/// are opened; every referenced WAV must be named in that folder (exact name, no search).
+ #[cfg(not(target_arch = "wasm32"))]
+ pub(crate) fn read_aaf_plan(path: &str, media_dir: &str, composition: Option<&str>) -> Result<Value> {
+-    use std::{
+-        io::Read,
+-        process::{Command, Stdio},
+-        time::{Duration, Instant},
+-    };
++    use soundcraft_interchange::aaf::{AafOptions, read_aaf};
+     crate::file_access::check_read(path).map_err(EngineError::Io)?;
+     crate::file_access::check_read(media_dir).map_err(EngineError::Io)?;
+     let meta = std::fs::metadata(path).map_err(|e| EngineError::Io(e.to_string()))?;
+     if !meta.is_file() || meta.len() > 512 * 1024 * 1024 || !Path::new(media_dir).is_dir() {
+         return Err(EngineError::Io("choose an AAF file (at most 512 MiB) and its media folder".into()));
+     }
+-    let python = std::env::var_os("SOUNDCRAFT_AAF_PYTHON")
+-        .ok_or_else(|| EngineError::Io("AAF reader is not configured. Launch the SoundCraft AAF development build.".into()))?;
+-    let script = std::env::var_os("SOUNDCRAFT_AAF_READER").ok_or_else(|| EngineError::Io("AAF reader script is not configured".into()))?;
+-    let mut command = Command::new(python);
+-    command
+-        .arg("-I")
+-        .arg("-B")
+-        .arg(script)
+-        .arg(path)
+-        .arg("--media-dir")
+-        .arg(media_dir)
+-        .stdin(Stdio::null())
+-        .stdout(Stdio::piped())
+-        .stderr(Stdio::piped());
+-    if let Some(id) = composition {
+-        command.arg("--composition").arg(id);
+-    }
+-    let mut child = command.spawn().map_err(|e| EngineError::Io(format!("cannot start AAF reader: {e}")))?;
+-    let stdout = child.stdout.take().ok_or_else(|| EngineError::Io("reader stdout unavailable".into()))?;
+-    let stderr = child.stderr.take().ok_or_else(|| EngineError::Io("reader stderr unavailable".into()))?;
+-    let out = std::thread::spawn(move || {
+-        let mut b = Vec::new();
+-        stdout.take(32 * 1024 * 1024 + 1).read_to_end(&mut b).map(|_| b)
+-    });
+-    let err = std::thread::spawn(move || {
+-        let mut b = Vec::new();
+-        stderr.take(64 * 1024 + 1).read_to_end(&mut b).map(|_| b)
+-    });
+-    let start = Instant::now();
+-    let status = loop {
+-        match child.try_wait() {
+-            Ok(Some(status)) => break Some(status),
+-            Ok(None) if start.elapsed() < Duration::from_secs(45) => std::thread::sleep(Duration::from_millis(20)),
+-            _ => {
+-                let _ = child.kill();
+-                let _ = child.wait();
+-                break None;
++    let aaf = std::fs::canonicalize(path).map_err(|e| EngineError::Io(e.to_string()))?;
++    let media_dir = std::fs::canonicalize(media_dir).map_err(|e| EngineError::Io(e.to_string()))?;
++    let base = aaf.parent().map(Path::to_path_buf).unwrap_or_default();
++    let stem = aaf.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
++    let file = std::fs::File::open(&aaf).map_err(|e| EngineError::Io(e.to_string()))?;
++    let options = AafOptions { composition, base_dir: &base, default_name: &stem };
++    let plan = read_aaf(std::io::BufReader::new(file), &options, &mut LocalMedia { media_dir: Some(media_dir) })
++        .map_err(|e| EngineError::Io(e.to_string()))?;
++    serde_json::to_value(plan).map_err(|e| EngineError::Io(e.to_string()))
++}
++
++/// Resolves AAF locators to local WAV files, optionally relinking by exact file name.
++#[cfg(not(target_arch = "wasm32"))]
++pub struct LocalMedia {
++    /// Canonical relink folder. `None` keeps the locator's own path.
++    pub media_dir: Option<PathBuf>,
++}
++
++#[cfg(not(target_arch = "wasm32"))]
++impl soundcraft_interchange::aaf::MediaResolver for LocalMedia {
++    fn resolve(&mut self, locator: &Path) -> std::result::Result<soundcraft_interchange::aaf::MediaInfo, soundcraft_interchange::aaf::MediaError> {
++        use soundcraft_interchange::aaf::{MediaError, MediaInfo, wav_info};
++        let source = lenient_canonical(locator);
++        let (path, relinked_from) = match &self.media_dir {
++            None => (source, None),
++            Some(dir) => {
++                let name = source.file_name().ok_or_else(|| MediaError::Invalid(format!("Locator has no file name: {}", source.display())))?;
++                let chosen = dir.join(name);
++                let resolved = lenient_canonical(&chosen);
++                if resolved.parent() != Some(dir.as_path()) {
++                    return Err(MediaError::Invalid(format!("Relink escapes media directory: {}", chosen.display())));
++                }
++                let from = (chosen != source).then(|| source.display().to_string());
++                (resolved, from)
+             }
++        };
++        if !path.is_file() {
++            return Err(MediaError::Missing(path.display().to_string()));
+         }
+-    };
+-    let bytes = out.join().map_err(|_| EngineError::Io("reader output failed".into()))?.map_err(|e| EngineError::Io(e.to_string()))?;
+-    let errors = err.join().map_err(|_| EngineError::Io("reader diagnostics failed".into()))?.map_err(|e| EngineError::Io(e.to_string()))?;
+-    if status.is_none() {
+-        return Err(EngineError::Io("AAF reader timed out or could not be monitored (45 s limit)".into()));
++        crate::file_access::check_read(&path).map_err(MediaError::Invalid)?;
++        let file = std::fs::File::open(&path).map_err(|e| MediaError::Invalid(format!("{}: {e}", path.display())))?;
++        let info = wav_info(std::io::BufReader::new(file)).map_err(|e| MediaError::Invalid(format!("{}: {e}", path.display())))?;
++        Ok(MediaInfo { path: path.display().to_string(), relinked_from, channels: info.channels, frames: info.frames, sample_rate: info.sample_rate })
+     }
+-    if !status.is_some_and(|s| s.success()) {
+-        return Err(EngineError::Io(String::from_utf8_lossy(&errors).trim().to_string()));
++}
++
++/// `realpath` without requiring the path to exist: the longest existing prefix is canonical
++/// (symlinks resolved) and the remaining components are appended after lexical `.`/`..` handling.
++#[cfg(not(target_arch = "wasm32"))]
++fn lenient_canonical(path: &Path) -> PathBuf {
++    use std::path::Component;
++    let mut lexical = PathBuf::new();
++    for c in path.components() {
++        match c {
++            Component::CurDir => {}
++            Component::ParentDir => {
++                lexical.pop();
++            }
++            other => lexical.push(other),
++        }
+     }
+-    if bytes.len() > 32 * 1024 * 1024 {
+-        return Err(EngineError::Io("AAF plan exceeds 32 MiB".into()));
++    let mut tail = Vec::new();
++    let mut prefix = lexical.as_path();
++    loop {
++        if let Ok(real) = std::fs::canonicalize(prefix) {
++            return tail.iter().rev().fold(real, |acc: PathBuf, part| acc.join(part));
++        }
++        match (prefix.parent(), prefix.file_name()) {
++            (Some(parent), Some(name)) => {
++                tail.push(name.to_os_string());
++                prefix = parent;
++            }
++            _ => return lexical,
++        }
+     }
+-    serde_json::from_slice(&bytes).map_err(|e| EngineError::Io(format!("invalid AAF plan: {e}")))
+ }
+ 
+ #[cfg(target_arch = "wasm32")]
+ pub(crate) fn read_aaf_plan(_: &str, _: &str, _: Option<&str>) -> Result<Value> {
+-    Err(EngineError::Io("AAF reader is available only in the desktop development build".into()))
++    Err(EngineError::Io("AAF import needs the desktop app: its media files are read from a local folder".into()))
+ }
+diff --git a/crates/engine/tests/aaf_import.rs b/crates/engine/tests/aaf_import.rs
+index ee0bd9a..c6fc34e 100644
+--- a/crates/engine/tests/aaf_import.rs
++++ b/crates/engine/tests/aaf_import.rs
+@@ -136,3 +136,64 @@ fn playing_import_cannot_bypass_the_transport_guard_with_target_params() {
+     assert!(e.execute("file.import_aaf", &p).is_err());
+     assert_eq!(e.session().tracks.len(), 1);
+ }
++
++/// A synthetic AAF (two tracks, three edits, chained source offsets) written by pyaaf2. Its
++/// external WAVs are regenerated here with the same names, layouts and lengths.
++struct AafFolder {
++    dir: PathBuf,
++}
++impl AafFolder {
++    fn new() -> Self {
++        let dir = Fixture::new().dir.with_extension("aaf");
++        std::fs::create_dir(&dir).unwrap();
++        std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/synthetic-two-tracks.aaf"), dir.join("Montaje sintético.aaf")).unwrap();
++        for (name, channels) in [("Diálogo á #1.wav", 1), ("Ambiente estéreo.wav", 2)] {
++            let audio = AudioBuffer { sample_rate: 48000, channels: vec![vec![0.25; 384000]; channels] };
++            let options = EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None };
++            std::fs::write(dir.join(name), soundcraft_audio_io::encode(&audio, &options).unwrap()).unwrap();
++        }
++        Self { dir }
++    }
++    fn preview(&self) -> soundcraft_engine::Result<Value> {
++        let aaf = self.dir.join("Montaje sintético.aaf");
++        Engine::default().execute("file.preview_aaf", &json!({"path": aaf, "media_dir": self.dir}))
++    }
++}
++impl Drop for AafFolder {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_dir_all(&self.dir);
++    }
++}
++
++#[test]
++fn rust_reader_turns_an_aaf_file_into_editable_tracks() {
++    let f = AafFolder::new();
++    let preview = f.preview().unwrap();
++    let plan = &preview["plan"];
++    assert_eq!(plan["name"], "Clase AAF — cortes y handles");
++    assert_eq!(plan["timecode_start"], json!([3600, 1]));
++    assert_eq!(plan["frame_rate"], json!({"rate": [25, 1], "drop": false}));
++    let names: Vec<_> = plan["tracks"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
++    assert_eq!(names, ["01 Diálogo", "02 Ambiente estéreo"]);
++    assert_eq!(plan["tracks"][0]["clips"][1]["offset"], json!([7, 2]));
++    let channels: Vec<_> = plan["sources"].as_array().unwrap().iter().map(|s| s["channels"].as_u64().unwrap()).collect();
++    assert_eq!(channels, [1, 2]);
++    assert!(plan["sources"][0]["path"].as_str().unwrap().ends_with("Diálogo á #1.wav"));
++
++    let mut e = Engine::default();
++    e.execute("file.import_aaf", &json!({"plan": plan, "selected": [0, 1]})).unwrap();
++    let edits: Vec<_> = e.session().tracks.iter().flat_map(|t| t.clips()).map(|c| (c.start, c.length, c.source_offset())).collect();
++    assert_eq!(edits, [(48000, 96000, 48000), (192000, 48000, 168000), (0, 240000, 72000)]);
++    assert_eq!(e.session().timecode_start, 3600 * 48000);
++    assert_eq!(e.session().tracks[1].channels(), 2);
++}
++
++#[test]
++fn rust_reader_requires_every_locator_in_the_chosen_media_folder() {
++    let f = AafFolder::new();
++    std::fs::remove_file(f.dir.join("Diálogo á #1.wav")).unwrap();
++    let err = f.preview().unwrap_err().to_string();
++    assert!(err.contains("Missing media"), "{err}");
++    std::fs::write(f.dir.join("Diálogo á #1.wav"), b"RIFF\0\0\0\0WAVEnot audio").unwrap();
++    assert!(f.preview().is_err());
++}
+diff --git a/crates/engine/tests/fixtures/synthetic-two-tracks.aaf b/crates/engine/tests/fixtures/synthetic-two-tracks.aaf
+new file mode 100644
+index 0000000000000000000000000000000000000000..848bdfdb2217e2529b482f0afc6be1eb9e2dc4e4
+GIT binary patch
+literal 462848
+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
+YS|GJRYJt=OsRdFCq!vgm@DMHV0GQqoAOHXW
+
+literal 0
+HcmV?d00001
+
+diff --git a/crates/interchange/Cargo.toml b/crates/interchange/Cargo.toml
+index 497c0bc..a0e3d5a 100644
+--- a/crates/interchange/Cargo.toml
++++ b/crates/interchange/Cargo.toml
+@@ -14,6 +14,7 @@ soundcraft-audio-io.workspace = true
+ serde.workspace = true
+ serde_json.workspace = true
+ thiserror.workspace = true
++cfb.workspace = true
+ 
+ [lints]
+ workspace = true
+diff --git a/crates/interchange/README.md b/crates/interchange/README.md
+index 0ada8a0..00b74b2 100644
+--- a/crates/interchange/README.md
++++ b/crates/interchange/README.md
+@@ -1,10 +1,15 @@
+ # Interchange core
+ 
+ Pure Rust Plan → Session constructor, originally developed in vhhr7/soundcraft_helper.
+-No format parser, process, UI or filesystem access. Rational endpoints are converted to
+-samples independently; sources retain complete media bounds and clips retain source offsets.
++Rational endpoints are converted to samples independently; sources retain complete media
++bounds and clips retain source offsets. No processes, UI or filesystem access.
+ 
+-The AAF engine adapter accepts a configured optional external reader through
+-SOUNDCRAFT_AAF_PYTHON and SOUNDCRAFT_AAF_READER. Reader packaging and upstream's
+-pure-Rust policy require review; this patch is not a complete bundled AAF release.
+-The desktop preview returns an explicit error when the reader is unavailable.
++`aaf` reads a strict subset of AAF (structured storage, via the `cfb` crate) into a Plan:
++timeline slots of SourceClip/Filler, resolved through MasterMobs to SourceMobs with a
++WAVEDescriptor and one external file locator. Gain, fades, transitions, selectors, nested
++sequences, embedded essence and split channels fail explicitly. The caller supplies the
++opened AAF and a `MediaResolver` that confines, relinks and probes each WAV; the engine's
++resolver accepts only files named exactly in the media folder the user chose.
++
++The reader's plans were checked byte-for-byte against the earlier pyaaf2 prototype on the
++synthetic fixture, twelve edited variants of it and a 22-track/124-edit real-world AAF.
+diff --git a/crates/interchange/src/aaf.rs b/crates/interchange/src/aaf.rs
+new file mode 100644
+index 0000000..3f554db
+--- /dev/null
++++ b/crates/interchange/src/aaf.rs
+@@ -0,0 +1,917 @@
++//! Strict, read-only AAF reader that emits an interchange [`Plan`]. Pure Rust over `cfb`.
++//!
++//! Reads the AAF structured-storage object model directly (properties streams, strong
++//! reference vectors/sets and dictionary weak references) for a deliberately small subset:
++//! one CompositionMob whose timeline slots hold Sequences of SourceClip and Filler, resolved
++//! through MasterMobs to SourceMobs with a WAVEDescriptor and one external NetworkLocator.
++//! Anything else in an audio slot aborts instead of producing a misleading montage.
++//!
++//! No filesystem access happens here: the caller passes the opened AAF and a [`MediaResolver`]
++//! that turns a decoded locator path into checked media properties.
++use crate::{ImportClip, ImportError, ImportTrack, Media, Plan, Rational, TimecodeRate};
++use std::{
++    collections::HashMap,
++    io::{Read, Seek, SeekFrom},
++    path::{Path, PathBuf},
++};
++
++type Result<T> = std::result::Result<T, ImportError>;
++fn fail(s: impl Into<String>) -> ImportError {
++    ImportError(s.into())
++}
++
++/// Upper bound on mobs, slots, components and collection entries.
++pub const MAX_ITEMS: usize = 100_000;
++const MAX_STREAM_BYTES: u64 = 32 * 1024 * 1024;
++const MAX_SOURCE_DEPTH: usize = 32;
++
++const CLASS_COMPOSITION_MOB: &str = "0d010101-0101-3500-060e-2b3402060101";
++const CLASS_MASTER_MOB: &str = "0d010101-0101-3600-060e-2b3402060101";
++const CLASS_SOURCE_MOB: &str = "0d010101-0101-3700-060e-2b3402060101";
++const CLASS_TIMELINE_SLOT: &str = "0d010101-0101-3b00-060e-2b3402060101";
++const CLASS_SEQUENCE: &str = "0d010101-0101-0f00-060e-2b3402060101";
++const CLASS_SOURCE_CLIP: &str = "0d010101-0101-1100-060e-2b3402060101";
++const CLASS_FILLER: &str = "0d010101-0101-0900-060e-2b3402060101";
++const CLASS_TIMECODE: &str = "0d010101-0101-1400-060e-2b3402060101";
++const CLASS_TRANSITION: &str = "0d010101-0101-1700-060e-2b3402060101";
++const CLASS_WAVE_DESCRIPTOR: &str = "0d010101-0101-2c00-060e-2b3402060101";
++
++const PID_HEADER: u16 = 0x0002;
++const PID_COMPONENT_DATADEF: u16 = 0x0201;
++const PID_COMPONENT_LENGTH: u16 = 0x0202;
++const PID_SEQUENCE_COMPONENTS: u16 = 0x1001;
++const PID_SOURCE_ID: u16 = 0x1101;
++const PID_SOURCE_SLOT_ID: u16 = 0x1102;
++const PID_START_TIME: u16 = 0x1201;
++const PID_TIMECODE_START: u16 = 0x1501;
++const PID_TIMECODE_FPS: u16 = 0x1502;
++const PID_TIMECODE_DROP: u16 = 0x1503;
++const PID_CONTENT_MOBS: u16 = 0x1901;
++const PID_CONTENT_ESSENCE: u16 = 0x1902;
++const PID_DEF_NAME: u16 = 0x1B02;
++const PID_ESSENCE_MOB_ID: u16 = 0x2701;
++const PID_DESCRIPTOR_LOCATORS: u16 = 0x2F01;
++const PID_FILE_SAMPLE_RATE: u16 = 0x3001;
++const PID_FILE_LENGTH: u16 = 0x3002;
++const PID_HEADER_CONTENT: u16 = 0x3B03;
++const PID_URL_STRING: u16 = 0x4001;
++const PID_MOB_ID: u16 = 0x4401;
++const PID_MOB_NAME: u16 = 0x4402;
++const PID_MOB_SLOTS: u16 = 0x4403;
++const PID_SOURCE_MOB_DESCRIPTOR: u16 = 0x4701;
++const PID_SLOT_ID: u16 = 0x4801;
++const PID_SLOT_NAME: u16 = 0x4802;
++const PID_SLOT_SEGMENT: u16 = 0x4803;
++const PID_SLOT_PHYSICAL: u16 = 0x4804;
++const PID_SLOT_EDIT_RATE: u16 = 0x4B01;
++const PID_SLOT_ORIGIN: u16 = 0x4B02;
++
++const SF_DATA: u16 = 0x82;
++const SF_STRONG_REF: u16 = 0x22;
++const SF_STRONG_VECTOR: u16 = 0x32;
++const SF_STRONG_SET: u16 = 0x3A;
++const SF_WEAK_REF: u16 = 0x02;
++
++/// Media properties of one external source, checked by the caller.
++#[derive(Debug, Clone)]
++pub struct MediaInfo {
++    /// Absolute, resolved path of the file that will be imported.
++    pub path: String,
++    /// The resolved locator path when the caller substituted another file (explicit relink).
++    pub relinked_from: Option<String>,
++    pub channels: u16,
++    pub frames: u64,
++    pub sample_rate: u32,
++}
++
++#[derive(Debug)]
++pub enum MediaError {
++    /// The (possibly relinked) file does not exist.
++    Missing(String),
++    Invalid(String),
++}
++
++/// Supplies checked properties for a locator. `locator` is the percent-decoded local path,
++/// already joined to the AAF's folder when the URL was relative. Implementations decide how
++/// to resolve, confine and relink it.
++pub trait MediaResolver {
++    fn resolve(&mut self, locator: &Path) -> std::result::Result<MediaInfo, MediaError>;
++}
++
++pub struct AafOptions<'a> {
++    /// Explicit CompositionMob MobID (`urn:smpte:umid:...`) when the file holds several.
++    pub composition: Option<&'a str>,
++    /// Folder of the AAF file, used for relative locators.
++    pub base_dir: &'a Path,
++    /// Session name when the composition has none (usually the AAF file stem).
++    pub default_name: &'a str,
++}
++
++/// Readable names for classes that commonly appear in rejected structures.
++const CLASS_NAMES: &[(&str, &str)] = &[
++    (CLASS_COMPOSITION_MOB, "CompositionMob"),
++    (CLASS_MASTER_MOB, "MasterMob"),
++    (CLASS_SOURCE_MOB, "SourceMob"),
++    (CLASS_TIMELINE_SLOT, "TimelineMobSlot"),
++    (CLASS_SEQUENCE, "Sequence"),
++    (CLASS_SOURCE_CLIP, "SourceClip"),
++    (CLASS_FILLER, "Filler"),
++    (CLASS_TIMECODE, "Timecode"),
++    (CLASS_TRANSITION, "Transition"),
++    (CLASS_WAVE_DESCRIPTOR, "WAVEDescriptor"),
++    ("0d010101-0101-0a00-060e-2b3402060101", "OperationGroup"),
++    ("0d010101-0101-0e00-060e-2b3402060101", "Selector"),
++    ("0d010101-0101-0b00-060e-2b3402060101", "NestedScope"),
++    ("0d010101-0101-0d00-060e-2b3402060101", "ScopeReference"),
++    ("0d010101-0101-0500-060e-2b3402060101", "EssenceGroup"),
++    ("0d010101-0101-0c00-060e-2b3402060101", "Pulldown"),
++    ("0d010101-0101-0400-060e-2b3402060101", "EdgeCode"),
++    ("0d010101-0101-0600-060e-2b3402060101", "Event"),
++    ("0d010101-0101-0800-060e-2b3402060101", "CommentMarker"),
++    ("0d010101-0101-2e00-060e-2b3402060101", "TapeDescriptor"),
++    ("0d010101-0101-4800-060e-2b3402060101", "PCMDescriptor"),
++    ("0d010101-0101-2600-060e-2b3402060101", "AIFCDescriptor"),
++    ("0d010101-0101-4400-060e-2b3402060101", "MultipleDescriptor"),
++    ("0d010101-0101-4a00-060e-2b3402060101", "ImportDescriptor"),
++    ("0d010101-0101-3900-060e-2b3402060101", "EventMobSlot"),
++    ("0d010101-0101-3a00-060e-2b3402060101", "StaticMobSlot"),
++];
++
++// ---------------------------------------------------------------------------------------------
++// Exact rational arithmetic (Python Fraction semantics within i128).
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++struct Q {
++    n: i128,
++    d: i128,
++}
++fn gcd(mut a: i128, mut b: i128) -> i128 {
++    a = a.abs();
++    b = b.abs();
++    while b != 0 {
++        (a, b) = (b, a % b);
++    }
++    a
++}
++impl Q {
++    fn new(n: i128, d: i128) -> Result<Q> {
++        if d == 0 {
++            return Err(fail("zero denominator"));
++        }
++        let (n, d) = if d < 0 { (n.checked_neg(), d.checked_neg()) } else { (Some(n), Some(d)) };
++        let (n, d) = n.zip(d).ok_or_else(|| fail("rational overflow"))?;
++        let g = gcd(n, d).max(1);
++        Ok(Q { n: n / g, d: d / g })
++    }
++    fn int(n: i64) -> Q {
++        Q { n: i128::from(n), d: 1 }
++    }
++    fn add(self, o: Q) -> Result<Q> {
++        let n = self.n.checked_mul(o.d).zip(o.n.checked_mul(self.d)).and_then(|(a, b)| a.checked_add(b));
++        let d = self.d.checked_mul(o.d);
++        Q::new(n.ok_or_else(|| fail("rational overflow"))?, d.ok_or_else(|| fail("rational overflow"))?)
++    }
++    fn div(self, o: Q) -> Result<Q> {
++        let n = self.n.checked_mul(o.d);
++        let d = self.d.checked_mul(o.n);
++        Q::new(n.ok_or_else(|| fail("rational overflow"))?, d.ok_or_else(|| fail("rational overflow"))?)
++    }
++    fn lt(self, o: Q) -> bool {
++        // Denominators are positive after normalisation; overflow compares as "not less".
++        match (self.n.checked_mul(o.d), o.n.checked_mul(self.d)) {
++            (Some(a), Some(b)) => a < b,
++            _ => false,
++        }
++    }
++    /// Python `round()`: nearest integer, ties to even.
++    fn round_half_even(self) -> i128 {
++        let floor = self.n.div_euclid(self.d);
++        let twice = (self.n - floor * self.d) * 2;
++        if twice < self.d || (twice == self.d && floor % 2 == 0) { floor } else { floor + 1 }
++    }
++    fn plan(self) -> Result<Rational> {
++        Ok(Rational(i64::try_from(self.n).map_err(|_| fail("time overflow"))?, i64::try_from(self.d).map_err(|_| fail("time overflow"))?))
++    }
++}
++
++// ---------------------------------------------------------------------------------------------
++// Structured storage object model.
++
++#[derive(Debug, Clone)]
++struct Obj {
++    path: String,
++    class: String,
++    props: HashMap<u16, (u16, Vec<u8>)>,
++}
++
++impl Obj {
++    fn data(&self, pid: u16) -> Option<&[u8]> {
++        self.props.get(&pid).filter(|(form, _)| *form == SF_DATA).map(|(_, d)| d.as_slice())
++    }
++    fn has(&self, pid: u16) -> bool {
++        self.props.contains_key(&pid)
++    }
++    fn bytes<const N: usize>(&self, pid: u16, what: &str) -> Result<[u8; N]> {
++        self.data(pid).and_then(|d| d.get(..N)).and_then(|d| d.try_into().ok()).ok_or_else(|| fail(format!("missing or short {what}")))
++    }
++    fn u32(&self, pid: u16, what: &str) -> Result<u32> {
++        self.bytes::<4>(pid, what).map(u32::from_le_bytes)
++    }
++    fn i64(&self, pid: u16, what: &str) -> Result<i64> {
++        self.bytes::<8>(pid, what).map(i64::from_le_bytes)
++    }
++    fn opt_u32(&self, pid: u16, what: &str) -> Result<Option<u32>> {
++        if self.has(pid) { self.u32(pid, what).map(Some) } else { Ok(None) }
++    }
++    fn rational(&self, pid: u16, what: &str) -> Result<Q> {
++        let b = self.bytes::<8>(pid, what)?;
++        let n = i32::from_le_bytes([b[0], b[1], b[2], b[3]]);
++        let d = i32::from_le_bytes([b[4], b[5], b[6], b[7]]);
++        Q::new(i128::from(n), i128::from(d))
++    }
++    /// Optional string; absent or empty reads as `None` like a falsy Python name.
++    fn string(&self, pid: u16) -> Option<String> {
++        self.data(pid).map(utf16).filter(|s| !s.is_empty())
++    }
++    fn length(&self) -> Result<i64> {
++        self.i64(PID_COMPONENT_LENGTH, "component Length")
++    }
++    fn is(&self, class: &str) -> bool {
++        self.class == class
++    }
++    /// Class name for messages; unknown (extension) classes print their AUID.
++    fn kind(&self) -> &str {
++        CLASS_NAMES.iter().find(|(id, _)| *id == self.class).map_or(self.class.as_str(), |(_, n)| n)
++    }
++}
++
++fn utf16(d: &[u8]) -> String {
++    let units: Vec<u16> = d.chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).take_while(|u| *u != 0).collect();
++    String::from_utf16_lossy(&units)
++}
++
++fn read_u16(d: &[u8], at: usize) -> Result<u16> {
++    d.get(at..at + 2).and_then(|b| b.try_into().ok()).map(u16::from_le_bytes).ok_or_else(|| fail("truncated AAF structure"))
++}
++fn read_u32(d: &[u8], at: usize) -> Result<u32> {
++    d.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_le_bytes).ok_or_else(|| fail("truncated AAF structure"))
++}
++
++/// `urn:smpte:umid:` text identical to pyaaf2 and Pro Tools' MobID notation.
++fn mob_urn(b: &[u8; 32]) -> String {
++    let label: String = b[..12].chunks(4).map(|c| c.iter().map(|x| format!("{x:02x}")).collect::<String>()).collect::<Vec<_>>().join(".");
++    let head = format!("urn:smpte:umid:{label}.{:02x}{:02x}{:02x}{:02x}", b[12], b[13], b[14], b[15]);
++    let data1 = u32::from_le_bytes([b[16], b[17], b[18], b[19]]);
++    let data2 = u16::from_le_bytes([b[20], b[21]]);
++    let data3 = u16::from_le_bytes([b[22], b[23]]);
++    let d4 = &b[24..32];
++    let d4a = format!("{:02x}{:02x}{:02x}{:02x}", d4[0], d4[1], d4[2], d4[3]);
++    let d4b = format!("{:02x}{:02x}{:02x}{:02x}", d4[4], d4[5], d4[6], d4[7]);
++    // Material numbers stored half swapped (an SMPTE label in Data4) print label-first.
++    if b[11] == 0 && d4[..6] == [0x06, 0x0e, 0x2b, 0x34, 0x7f, 0x7f] {
++        format!("{head}.{d4a}.{d4b}.{data1:08x}.{data2:04x}{data3:04x}")
++    } else {
++        format!("{head}.{data1:08x}.{data2:04x}{data3:04x}.{d4a}.{d4b}")
++    }
++}
++
++struct Store<F> {
++    cfb: cfb::CompoundFile<F>,
++    objects_read: usize,
++    weakrefs: Vec<Vec<u16>>,
++    datadefs: HashMap<Vec<u8>, Option<String>>,
++}
++
++impl<F: Read + Seek> Store<F> {
++    fn open(file: F) -> Result<Self> {
++        let cfb = cfb::CompoundFile::open(file).map_err(|e| fail(format!("not an AAF structured-storage file: {e}")))?;
++        let mut s = Store { cfb, objects_read: 0, weakrefs: Vec::new(), datadefs: HashMap::new() };
++        s.weakrefs = s.read_weakref_table()?;
++        Ok(s)
++    }
++
++    fn stream(&mut self, path: &str) -> Result<Option<Vec<u8>>> {
++        if !self.cfb.is_stream(path) {
++            return Ok(None);
++        }
++        let s = self.cfb.open_stream(path).map_err(|e| fail(format!("{path}: {e}")))?;
++        let mut out = Vec::new();
++        s.take(MAX_STREAM_BYTES + 1).read_to_end(&mut out).map_err(|e| fail(format!("{path}: {e}")))?;
++        if out.len() as u64 > MAX_STREAM_BYTES {
++            return Err(fail(format!("{path}: AAF stream exceeds 32 MiB")));
++        }
++        Ok(Some(out))
++    }
++
++    fn read_weakref_table(&mut self) -> Result<Vec<Vec<u16>>> {
++        let Some(d) = self.stream("/referenced properties")? else { return Ok(Vec::new()) };
++        if d.first() != Some(&0x4c) {
++            return Err(fail("unsupported AAF byte order"));
++        }
++        let paths = usize::from(read_u16(&d, 1)?);
++        let pids = read_u32(&d, 3)? as usize;
++        if pids > MAX_ITEMS {
++            return Err(fail("referenced property table too large"));
++        }
++        let mut table = Vec::new();
++        let mut path = Vec::new();
++        for i in 0..pids {
++            match read_u16(&d, 7 + 2 * i)? {
++                0 => table.push(std::mem::take(&mut path)),
++                pid => path.push(pid),
++            }
++        }
++        if table.len() != paths {
++            return Err(fail("inconsistent referenced property table"));
++        }
++        Ok(table)
++    }
++
++    fn object(&mut self, path: &str) -> Result<Obj> {
++        self.objects_read += 1;
++        if self.objects_read > 4 * MAX_ITEMS {
++            return Err(fail("too many AAF objects"));
++        }
++        let entry = self.cfb.entry(path).map_err(|e| fail(format!("{path}: {e}")))?;
++        if !entry.is_storage() {
++            return Err(fail(format!("{path}: not an AAF object")));
++        }
++        let class = entry.clsid().to_string();
++        let props_path = if path == "/" { "/properties".to_string() } else { format!("{path}/properties") };
++        let d = self.stream(&props_path)?.ok_or_else(|| fail(format!("{path}: missing properties")))?;
++        if d.first() != Some(&0x4c) {
++            return Err(fail("unsupported AAF byte order"));
++        }
++        let count = usize::from(read_u16(&d, 2)?);
++        let mut props = HashMap::new();
++        let mut at = 4 + 6 * count;
++        for i in 0..count {
++            let pid = read_u16(&d, 4 + 6 * i)?;
++            let form = read_u16(&d, 6 + 6 * i)?;
++            let size = usize::from(read_u16(&d, 8 + 6 * i)?);
++            let value = d.get(at..at + size).ok_or_else(|| fail(format!("{path}: truncated properties")))?.to_vec();
++            at += size;
++            props.insert(pid, (form, value));
++        }
++        Ok(Obj { path: path.to_string(), class, props })
++    }
++
++    fn child_path(parent: &Obj, name: &str) -> String {
++        if parent.path == "/" { format!("/{name}") } else { format!("{}/{name}", parent.path) }
++    }
++
++    fn reference(parent: &Obj, pid: u16, form: u16) -> Option<String> {
++        parent.props.get(&pid).filter(|(f, _)| *f == form).map(|(_, d)| utf16(d))
++    }
++
++    fn strong(&mut self, parent: &Obj, pid: u16, what: &str) -> Result<Obj> {
++        let name = Self::reference(parent, pid, SF_STRONG_REF).ok_or_else(|| fail(format!("missing {what}")))?;
++        self.object(&Self::child_path(parent, &name))
++    }
++
++    fn opt_strong(&mut self, parent: &Obj, pid: u16, what: &str) -> Result<Option<Obj>> {
++        if parent.has(pid) { self.strong(parent, pid, what).map(Some) } else { Ok(None) }
++    }
++
++    /// Strong reference vector, in stored order. Absent optional vectors read as empty.
++    fn vector(&mut self, parent: &Obj, pid: u16, what: &str, required: bool) -> Result<Vec<Obj>> {
++        let Some(name) = Self::reference(parent, pid, SF_STRONG_VECTOR) else {
++            return if required { Err(fail(format!("missing {what}"))) } else { Ok(Vec::new()) };
++        };
++        let index = self.stream(&Self::child_path(parent, &format!("{name} index")))?.ok_or_else(|| fail(format!("missing {what} index")))?;
++        let count = read_u32(&index, 0)? as usize;
++        if count > MAX_ITEMS {
++            return Err(fail(format!("too many {what}")));
++        }
++        (0..count)
++            .map(|i| {
++                let key = read_u32(&index, 12 + 4 * i)?;
++                self.object(&Self::child_path(parent, &format!("{name}{{{key:x}}}")))
++            })
++            .collect()
++    }
++
++    /// Strong reference set: (key bytes, child storage path) in stored order.
++    fn set_entries(&mut self, parent: &Obj, pid: u16, what: &str) -> Result<Vec<(Vec<u8>, String)>> {
++        let Some(name) = Self::reference(parent, pid, SF_STRONG_SET) else { return Ok(Vec::new()) };
++        let index = self.stream(&Self::child_path(parent, &format!("{name} index")))?.ok_or_else(|| fail(format!("missing {what} index")))?;
++        let count = read_u32(&index, 0)? as usize;
++        let key_size = usize::from(*index.get(14).ok_or_else(|| fail(format!("truncated {what} index")))?);
++        if count > MAX_ITEMS || !matches!(key_size, 16 | 32) {
++            return Err(fail(format!("unsupported {what} index")));
++        }
++        let entry = 8 + key_size;
++        (0..count)
++            .map(|i| {
++                let at = 15 + entry * i;
++                let local = read_u32(&index, at)?;
++                let key = index.get(at + 8..at + 8 + key_size).ok_or_else(|| fail(format!("truncated {what} index")))?.to_vec();
++                Ok((key, Self::child_path(parent, &format!("{name}{{{local:x}}}"))))
++            })
++            .collect()
++    }
++
++    fn set(&mut self, parent: &Obj, pid: u16, what: &str) -> Result<Vec<Obj>> {
++        let entries = self.set_entries(parent, pid, what)?;
++        entries.into_iter().map(|(_, path)| self.object(&path)).collect()
++    }
++
++    /// Short name of a component's data definition (`DataDef_` prefix removed), as pyaaf2's
++    /// `media_kind`. Resolved through the file's referenced-property table, not built-ins.
++    fn media_kind(&mut self, root: &Obj, component: &Obj) -> Result<Option<String>> {
++        let Some((form, d)) = component.props.get(&PID_COMPONENT_DATADEF) else { return Ok(None) };
++        if *form != SF_WEAK_REF {
++            return Err(fail("unsupported DataDefinition reference"));
++        }
++        let index = usize::from(read_u16(d, 0)?);
++        let size = usize::from(*d.get(4).ok_or_else(|| fail("truncated DataDefinition reference"))?);
++        let key = d.get(5..5 + size).ok_or_else(|| fail("truncated DataDefinition reference"))?.to_vec();
++        if let Some(name) = self.datadefs.get(&key) {
++            return Ok(name.clone());
++        }
++        let path = self.weakrefs.get(index).cloned().ok_or_else(|| fail("unknown DataDefinition reference"))?;
++        let (last, walk) = path.split_last().ok_or_else(|| fail("empty weak reference path"))?;
++        let mut owner = root.clone();
++        for pid in walk {
++            owner = self.strong(&owner, *pid, "weak reference owner")?;
++        }
++        let target = self.set_entries(&owner, *last, "data definitions")?.into_iter().find(|(k, _)| *k == key).map(|(_, p)| p);
++        let path = target.ok_or_else(|| fail("DataDefinition not found in dictionary"))?;
++        let name = self.object(&path)?.string(PID_DEF_NAME).map(|n| n.replace("DataDef_", "").replace("ContainerDef_", ""));
++        self.datadefs.insert(key, name.clone());
++        Ok(name)
++    }
++}
++
++// ---------------------------------------------------------------------------------------------
++// Plan construction (same rules and messages as the original pyaaf2 adapter).
++
++fn rate(slot: &Obj) -> Result<Q> {
++    if !slot.is(CLASS_TIMELINE_SLOT) || slot.i64(PID_SLOT_ORIGIN, "slot Origin")? != 0 {
++        let id = slot.u32(PID_SLOT_ID, "SlotID").map(|i| i.to_string()).unwrap_or_default();
++        return Err(fail(format!("Unsupported slot/origin: {} {id}", slot.kind())));
++    }
++    let r = slot.rational(PID_SLOT_EDIT_RATE, "slot EditRate")?;
++    if r.n <= 0 {
++        return Err(fail("Edit rate must be positive"));
++    }
++    Ok(r)
++}
++
++/// Local path from a NetworkLocator URL (`file:` or scheme-less), percent-decoded.
++fn locator_path(url: &str, base: &Path) -> Result<PathBuf> {
++    let mut rest = url;
++    let mut scheme = String::new();
++    if let Some(i) = url.find(':') {
++        let s = &url[..i];
++        if s.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) && s.chars().all(|c| c.is_ascii_alphanumeric() || "+-.".contains(c)) {
++            scheme = s.to_ascii_lowercase();
++            rest = &url[i + 1..];
++        }
++    }
++    let mut netloc = "";
++    if let Some(after) = rest.strip_prefix("//") {
++        let end = after.find(['/', '?', '#']).unwrap_or(after.len());
++        netloc = &after[..end];
++        rest = &after[end..];
++    }
++    let (rest, fragment) = rest.split_once('#').unwrap_or((rest, ""));
++    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
++    if !matches!(scheme.as_str(), "" | "file") || !matches!(netloc, "" | "localhost") {
++        return Err(fail(format!("Unsupported non-local locator: {url}")));
++    }
++    if !query.is_empty() || !fragment.is_empty() {
++        return Err(fail(format!("Locator must escape special characters: {url}")));
++    }
++    let p = PathBuf::from(percent_decode(path));
++    Ok(if p.is_absolute() { p } else { base.join(p) })
++}
++
++fn percent_decode(s: &str) -> String {
++    let b = s.as_bytes();
++    let mut out = Vec::with_capacity(b.len());
++    let mut i = 0;
++    while i < b.len() {
++        let hex = b.get(i + 1..i + 3).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
++        match (b[i], hex) {
++            (b'%', Some(v)) => {
++                out.push(v);
++                i += 3;
++            }
++            (c, _) => {
++                out.push(c);
++                i += 1;
++            }
++        }
++    }
++    String::from_utf8_lossy(&out).into_owned()
++}
++
++struct Builder<'a, F> {
++    store: Store<F>,
++    root: Obj,
++    mobs: HashMap<String, Obj>,
++    embedded: Vec<String>,
++    options: &'a AafOptions<'a>,
++    media: &'a mut dyn MediaResolver,
++    sources: Vec<Media>,
++    warnings: Vec<String>,
++}
++
++impl<F: Read + Seek> Builder<'_, F> {
++    fn slot_of(&mut self, mob: &Obj, slot_id: u32) -> Result<Option<Obj>> {
++        for slot in self.store.vector(mob, PID_MOB_SLOTS, "mob slots", true)? {
++            if slot.u32(PID_SLOT_ID, "SlotID")? == slot_id {
++                return Ok(Some(slot));
++            }
++        }
++        Ok(None)
++    }
++
++    fn slot_length(&mut self, slot: &Obj) -> Result<i64> {
++        let seg = self.store.strong(slot, PID_SLOT_SEGMENT, "slot Segment")?;
++        if !seg.is(CLASS_SEQUENCE) {
++            return seg.length();
++        }
++        let mut total = 0i64;
++        for c in self.store.vector(&seg, PID_SEQUENCE_COMPONENTS, "sequence components", true)? {
++            let l = c.length()?;
++            total = if c.is(CLASS_TRANSITION) { total.checked_sub(l) } else { total.checked_add(l) }.ok_or_else(|| fail("length overflow"))?;
++        }
++        Ok(total)
++    }
++
++    /// Follows a SourceClip to its file SourceMob. Returns (source key, mob, offset seconds).
++    fn resolve(&mut self, clip: &Obj, incoming: Q, mut offset: Q, seen: &mut Vec<(String, u32)>) -> Result<(String, Q)> {
++        if !clip.is(CLASS_SOURCE_CLIP) {
++            return Err(fail(format!("Unsupported source chain component: {}", clip.kind())));
++        }
++        let id = clip.bytes::<32>(PID_SOURCE_ID, "SourceID").ok();
++        let slot_id = clip.u32(PID_SOURCE_SLOT_ID, "SourceMobSlotID")?;
++        let urn = id.filter(|b| b.iter().any(|x| *x != 0)).map(|b| mob_urn(&b));
++        let mob = urn.as_ref().and_then(|u| self.mobs.get(u)).cloned();
++        let Some(mob) = mob else {
++            return Err(fail(format!("Unresolved SourceClip MobID/slot: {}/{slot_id}", urn.unwrap_or_default())));
++        };
++        let key_urn = urn.unwrap_or_default();
++        let slot = self.slot_of(&mob, slot_id)?.ok_or_else(|| fail(format!("Unresolved SourceClip MobID/slot: {key_urn}/{slot_id}")))?;
++        if seen.contains(&(key_urn.clone(), slot_id)) || seen.len() >= MAX_SOURCE_DEPTH {
++            return Err(fail("Cyclic or too deep source chain"));
++        }
++        let rr = rate(&slot)?;
++        let start = clip.i64(PID_START_TIME, "SourceClip StartTime")?;
++        offset = offset.add(Q::int(start).div(rr)?)?;
++        let name = mob.string(PID_MOB_NAME);
++        if mob.is(CLASS_SOURCE_MOB) && self.embedded.contains(&key_urn) {
++            return Err(fail(format!("Embedded essence unsupported: {}", name.unwrap_or_default())));
++        }
++        if mob.is(CLASS_SOURCE_MOB) {
++            let desc = self.store.opt_strong(&mob, PID_SOURCE_MOB_DESCRIPTOR, "EssenceDescription")?;
++            if let Some(desc) = desc.filter(|d| d.is(CLASS_WAVE_DESCRIPTOR)) {
++                return self.file_source(&mob, &slot, &desc, key_urn, offset);
++            }
++        }
++        if !mob.is(CLASS_MASTER_MOB) {
++            return Err(fail(format!("Unsupported referenced mob/descriptor: {}", name.unwrap_or_default())));
++        }
++        let window_end = offset.add(Q::int(clip.length()?).div(incoming)?)?;
++        let slot_end = Q::int(self.slot_length(&slot)?).div(rr)?;
++        if offset.lt(Q::int(0)) || slot_end.lt(window_end) {
++            return Err(fail(format!("SourceClip exceeds master slot: {}", name.unwrap_or_default())));
++        }
++        let segment = self.store.strong(&slot, PID_SLOT_SEGMENT, "slot Segment")?;
++        if !segment.is(CLASS_SOURCE_CLIP) {
++            return Err(fail(format!("Unsupported master segment: {}", segment.kind())));
++        }
++        seen.push((key_urn, slot_id));
++        self.resolve(&segment, rr, offset, seen)
++    }
++
++    fn file_source(&mut self, mob: &Obj, slot: &Obj, desc: &Obj, key: String, offset: Q) -> Result<(String, Q)> {
++        let name = mob.string(PID_MOB_NAME);
++        let locators = self.store.vector(desc, PID_DESCRIPTOR_LOCATORS, "locators", false)?;
++        let urls: Vec<String> = locators.iter().map(|l| l.data(PID_URL_STRING).map(utf16).unwrap_or_default()).collect();
++        let [url] = urls.as_slice() else {
++            return Err(fail(format!("Expected one unambiguous WAV locator: {}", name.unwrap_or_default())));
++        };
++        let locator = locator_path(url, self.options.base_dir)?;
++        let info = self.media.resolve(&locator).map_err(|e| match e {
++            MediaError::Missing(p) => fail(format!("Missing media: {p}; locator={url}")),
++            MediaError::Invalid(m) => fail(m),
++        })?;
++        if let Some(from) = &info.relinked_from {
++            self.warnings.push(format!("Relinked {from} -> {}", info.path));
++        }
++        if !matches!(info.channels, 1 | 2) {
++            return Err(fail("Only mono/stereo PCM WAV supported"));
++        }
++        if desc.rational(PID_FILE_SAMPLE_RATE, "descriptor SampleRate")? != Q::int(i64::from(info.sample_rate)) {
++            return Err(fail(format!("Descriptor/file sample rates differ: {}", name.unwrap_or_default())));
++        }
++        if u64::try_from(desc.i64(PID_FILE_LENGTH, "descriptor Length")?).ok() != Some(info.frames) {
++            return Err(fail(format!("Descriptor/file lengths differ: {}", name.unwrap_or_default())));
++        }
++        // Full interleaved WAV only: selecting one physical channel needs a channel map.
++        if !matches!(slot.opt_u32(PID_SLOT_PHYSICAL, "PhysicalTrackNumber")?, None | Some(0)) {
++            return Err(fail("Physical channel selection / split stereo unsupported"));
++        }
++        if !self.sources.iter().any(|s| s.key == key) {
++            let stem = Path::new(&info.path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
++            self.sources.push(Media {
++                key: key.clone(),
++                name: name.unwrap_or(stem),
++                path: info.path,
++                channels: info.channels,
++                frames: info.frames,
++                sample_rate: info.sample_rate,
++            });
++        }
++        Ok((key, offset))
++    }
++}
++
++/// Reads one composition of an AAF as an interchange plan. Fails on anything outside the
++/// supported subset; no partial plan is returned.
++pub fn read_aaf<F: Read + Seek>(file: F, options: &AafOptions, media: &mut dyn MediaResolver) -> Result<Plan> {
++    let mut store = Store::open(file)?;
++    let root = store.object("/")?;
++    let header = store.strong(&root, PID_HEADER, "Header")?;
++    let content = store.strong(&header, PID_HEADER_CONTENT, "ContentStorage")?;
++    let all = store.set(&content, PID_CONTENT_MOBS, "mobs")?;
++    if all.len() > MAX_ITEMS {
++        return Err(fail("Too many mobs"));
++    }
++    let mut mobs = HashMap::new();
++    let mut compositions = Vec::new();
++    for mob in all {
++        let urn = mob_urn(&mob.bytes::<32>(PID_MOB_ID, "MobID")?);
++        if mob.is(CLASS_COMPOSITION_MOB) {
++            compositions.push((urn.clone(), mob.clone()));
++        }
++        mobs.insert(urn, mob);
++    }
++    let mut embedded = Vec::new();
++    for e in store.set(&content, PID_CONTENT_ESSENCE, "essence data")? {
++        embedded.push(mob_urn(&e.bytes::<32>(PID_ESSENCE_MOB_ID, "EssenceData MobID")?));
++    }
++    if let Some(id) = options.composition {
++        compositions.retain(|(urn, _)| urn == id);
++    }
++    let [(_, comp)] = compositions.as_slice() else {
++        let listed: Vec<String> = compositions.iter().map(|(u, m)| format!("({:?}, {u:?})", m.string(PID_MOB_NAME).unwrap_or_default())).collect();
++        return Err(fail(format!("Choose exactly one composition by MobID: [{}]", listed.join(", "))));
++    };
++    let comp = comp.clone();
++    let mut b = Builder {
++        store,
++        root,
++        mobs,
++        embedded,
++        options,
++        media,
++        sources: Vec::new(),
++        warnings: vec![
++            "AAF subset: plugins, routing, automation and metadata are not transferred.".into(),
++            "Clip gain, fades, transitions, selectors, nested sequences and embedded media are unsupported; encountered editorial structures fail."
++                .into(),
++        ],
++    };
++    let mut plan_tracks = Vec::new();
++    let mut frame_rate = None;
++    let mut timecode_start = Rational(0, 1);
++    let mut count = 0usize;
++    let slots = b.store.vector(&comp, PID_MOB_SLOTS, "composition slots", true)?;
++    for slot in slots {
++        if plan_tracks.len() >= MAX_ITEMS {
++            return Err(fail("Too many tracks"));
++        }
++        let rr = rate(&slot)?;
++        let seg = b.store.strong(&slot, PID_SLOT_SEGMENT, "slot Segment")?;
++        let slot_id = slot.u32(PID_SLOT_ID, "SlotID")?;
++        if seg.is(CLASS_TIMECODE) {
++            if frame_rate.is_some() {
++                return Err(fail("Multiple timecode slots unsupported"));
++            }
++            let fps = u16::from_le_bytes(seg.bytes::<2>(PID_TIMECODE_FPS, "Timecode FPS")?);
++            let drop = seg.bytes::<1>(PID_TIMECODE_DROP, "Timecode Drop")?[0] != 0;
++            if rr.round_half_even() != i128::from(fps) {
++                return Err(fail("Timecode FPS disagrees with edit rate"));
++            }
++            frame_rate = Some(TimecodeRate { rate: rr.plan()?, drop });
++            timecode_start = Q::int(seg.i64(PID_TIMECODE_START, "Timecode Start")?).div(rr)?.plan()?;
++            continue;
++        }
++        let kind = b.store.media_kind(&b.root, &seg)?;
++        if kind.as_deref() != Some("Sound") {
++            b.warnings.push(format!("Skipped non-audio slot {slot_id}: {}", kind.as_deref().unwrap_or("None")));
++            continue;
++        }
++        let physical = slot.opt_u32(PID_SLOT_PHYSICAL, "PhysicalTrackNumber")?;
++        let fallback = format!("Audio {}", physical.unwrap_or(slot_id));
++        let name = match slot.string(PID_SLOT_NAME) {
++            Some(n) => n,
++            None => {
++                b.warnings.push(format!("Unnamed AAF slot {slot_id}: assigned {fallback}"));
++                fallback
++            }
++        };
++        let items =
++            if seg.is(CLASS_SEQUENCE) { b.store.vector(&seg, PID_SEQUENCE_COMPONENTS, "sequence components", true)? } else { vec![seg.clone()] };
++        let mut cursor = 0i64;
++        let mut formats = Vec::new();
++        let mut clips = Vec::new();
++        for item in items {
++            count += 1;
++            if count > MAX_ITEMS {
++                return Err(fail("Too many components"));
++            }
++            let len = item.length()?;
++            if len < 0 {
++                return Err(fail("Negative component length"));
++            }
++            if item.is(CLASS_FILLER) {
++                cursor = cursor.checked_add(len).ok_or_else(|| fail("length overflow"))?;
++                continue;
++            }
++            if !item.is(CLASS_SOURCE_CLIP) {
++                return Err(fail(format!("Unsupported component in {name}: {}", item.kind())));
++            }
++            let (sid, offset) = b.resolve(&item, rr, Q::int(0), &mut Vec::new())?;
++            let source = b.sources.iter().find(|s| s.key == sid).ok_or_else(|| fail("source missing"))?;
++            if !formats.contains(&source.channels) {
++                formats.push(source.channels);
++            }
++            let source_name = source.name.clone();
++            let clip_name = item
++                .bytes::<32>(PID_SOURCE_ID, "SourceID")
++                .ok()
++                .and_then(|id| b.mobs.get(&mob_urn(&id)))
++                .and_then(|m| m.string(PID_MOB_NAME))
++                .unwrap_or(source_name);
++            let end = cursor.checked_add(len).ok_or_else(|| fail("length overflow"))?;
++            clips.push(ImportClip {
++                name: clip_name,
++                source: sid,
++                start: Q::int(cursor).div(rr)?.plan()?,
++                end: Q::int(end).div(rr)?.plan()?,
++                offset: offset.plan()?,
++            });
++            cursor = end;
++        }
++        if seg.is(CLASS_SEQUENCE) && seg.length()? != cursor {
++            return Err(fail("Sequence declared length differs from components"));
++        }
++        if formats.len() > 1 {
++            return Err(fail(format!("Mixed channel layouts in track: {name}")));
++        }
++        let channels = match formats.first() {
++            Some(c) => *c,
++            None => {
++                b.warnings.push(format!("Empty track {name}: mono layout assumed"));
++                1
++            }
++        };
++        plan_tracks.push(ImportTrack { name, channels, clips });
++    }
++    let mut rates: Vec<u32> = b.sources.iter().map(|s| s.sample_rate).collect();
++    rates.sort_unstable();
++    rates.dedup();
++    let [sample_rate] = rates.as_slice() else {
++        return Err(fail("Require at least one source and a single source sample rate; no resampling yet"));
++    };
++    if frame_rate.is_none() {
++        b.warnings.push("No composition timecode: start=0, frame rate defaults to 30".into());
++    }
++    Ok(Plan {
++        schema_version: 1,
++        name: comp.string(PID_MOB_NAME).unwrap_or_else(|| options.default_name.to_string()),
++        sample_rate: *sample_rate,
++        timecode_start,
++        frame_rate,
++        sources: b.sources,
++        tracks: plan_tracks,
++        warnings: b.warnings,
++    })
++}
++
++/// PCM WAV header properties. Reads chunk headers only; sample data is not loaded.
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub struct WavInfo {
++    pub channels: u16,
++    pub sample_rate: u32,
++    pub frames: u64,
++}
++
++const KSDATAFORMAT_SUBTYPE_PCM: [u8; 16] = [1, 0, 0, 0, 0, 0, 0x10, 0, 0x80, 0, 0, 0xaa, 0, 0x38, 0x9b, 0x71];
++
++/// Integer PCM RIFF/WAVE only (format 1, or WAVE_FORMAT_EXTENSIBLE with the PCM subtype).
++pub fn wav_info<R: Read + Seek>(mut r: R) -> std::result::Result<WavInfo, String> {
++    let mut head = [0u8; 12];
++    r.read_exact(&mut head).map_err(|_| "not a RIFF/WAVE file".to_string())?;
++    if &head[..4] != b"RIFF" || &head[8..] != b"WAVE" {
++        return Err("Only mono/stereo PCM WAV supported (not RIFF/WAVE)".into());
++    }
++    let mut fmt: Option<(u16, u32, u16, u16)> = None;
++    for _ in 0..4096 {
++        let mut ch = [0u8; 8];
++        if r.read_exact(&mut ch).is_err() {
++            break;
++        }
++        let size = u32::from_le_bytes([ch[4], ch[5], ch[6], ch[7]]);
++        let padded = u64::from(size) + u64::from(size & 1);
++        match &ch[..4] {
++            b"fmt " => {
++                let mut f = vec![0u8; usize::try_from(size.min(64)).unwrap_or(64)];
++                r.read_exact(&mut f).map_err(|_| "truncated WAV fmt chunk".to_string())?;
++                let u16_at = |i: usize| f.get(i..i + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
++                let tag = u16_at(0).ok_or("truncated WAV fmt chunk")?;
++                let channels = u16_at(2).ok_or("truncated WAV fmt chunk")?;
++                let rate = f.get(4..8).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).ok_or("truncated WAV fmt chunk")?;
++                let bits = u16_at(14).ok_or("truncated WAV fmt chunk")?;
++                let pcm = tag == 1 || (tag == 0xfffe && f.get(24..40) == Some(&KSDATAFORMAT_SUBTYPE_PCM[..]));
++                if !pcm {
++                    return Err("Only mono/stereo PCM WAV supported".into());
++                }
++                fmt = Some((tag, rate, channels, bits));
++                r.seek(SeekFrom::Current(i64::try_from(padded).unwrap_or(i64::MAX) - f.len() as i64)).map_err(|e| e.to_string())?;
++            }
++            b"data" => {
++                let (_, sample_rate, channels, bits) = fmt.ok_or("WAV data before fmt chunk")?;
++                let frame = u64::from(channels) * u64::from(bits.div_ceil(8));
++                if frame == 0 || sample_rate == 0 {
++                    return Err("invalid WAV format".into());
++                }
++                return Ok(WavInfo { channels, sample_rate, frames: u64::from(size) / frame });
++            }
++            _ => {
++                r.seek(SeekFrom::Current(i64::try_from(padded).map_err(|e| e.to_string())?)).map_err(|e| e.to_string())?;
++            }
++        }
++    }
++    Err("WAV data chunk not found".into())
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn rationals_reduce_and_round_like_python() {
++        let r = Q::new(24000, 1001).unwrap();
++        assert_eq!(r.round_half_even(), 24);
++        assert_eq!(Q::new(5, 2).unwrap().round_half_even(), 2);
++        assert_eq!(Q::new(7, 2).unwrap().round_half_even(), 4);
++        assert_eq!(Q::int(48).div(Q::int(96)).unwrap(), Q { n: 1, d: 2 });
++        assert!(Q::new(1, 0).is_err());
++    }
++
++    #[test]
++    fn locators_accept_only_local_files() {
++        let base = Path::new("/base");
++        assert_eq!(locator_path("file:///Macintosh%20HD/a%23b.wav", base).unwrap(), PathBuf::from("/Macintosh HD/a#b.wav"));
++        assert_eq!(locator_path("file://localhost/x.wav", base).unwrap(), PathBuf::from("/x.wav"));
++        assert_eq!(locator_path("rel%C3%A1.wav", base).unwrap(), PathBuf::from("/base/relá.wav"));
++        assert!(locator_path("http://host/x.wav", base).is_err());
++        assert!(locator_path("file://server/x.wav", base).is_err());
++        assert!(locator_path("file:///x.wav?y", base).is_err());
++        assert!(locator_path("file:///x.wav#y", base).is_err());
++    }
++
++    #[test]
++    fn mob_ids_print_as_smpte_urns() {
++        let mut b = [0u8; 32];
++        b[..12].copy_from_slice(&[0x06, 0x0a, 0x2b, 0x34, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x0f, 0x00]);
++        b[12] = 0x13;
++        b[16..20].copy_from_slice(&0x4fa5c20fu32.to_le_bytes());
++        b[20..22].copy_from_slice(&0x4e30u16.to_le_bytes());
++        b[22..24].copy_from_slice(&0x1e50u16.to_le_bytes());
++        b[24..32].copy_from_slice(&[0x06, 0x0e, 0x2b, 0x34, 0x7f, 0x7f, 0x2a, 0x80]);
++        assert_eq!(mob_urn(&b), "urn:smpte:umid:060a2b34.01010101.01010f00.13000000.060e2b34.7f7f2a80.4fa5c20f.4e301e50");
++    }
++
++    fn wav(tag: u16, channels: u16, bits: u16, data: u32, junk: u32) -> Vec<u8> {
++        let mut v = b"RIFF\0\0\0\0WAVE".to_vec();
++        v.extend(b"JUNK");
++        v.extend(junk.to_le_bytes());
++        v.extend(vec![0; (junk + (junk & 1)) as usize]);
++        v.extend(b"fmt ");
++        v.extend(16u32.to_le_bytes());
++        v.extend(tag.to_le_bytes());
++        v.extend(channels.to_le_bytes());
++        v.extend(48000u32.to_le_bytes());
++        v.extend((48000 * u32::from(channels) * u32::from(bits / 8)).to_le_bytes());
++        v.extend((channels * bits / 8).to_le_bytes());
++        v.extend(bits.to_le_bytes());
++        v.extend(b"data");
++        v.extend(data.to_le_bytes());
++        v
++    }
++
++    #[test]
++    fn wav_headers_are_read_without_sample_data() {
++        let info = wav_info(std::io::Cursor::new(wav(1, 2, 24, 6 * 1000, 3))).unwrap();
++        assert_eq!(info, WavInfo { channels: 2, sample_rate: 48000, frames: 1000 });
++        assert!(wav_info(std::io::Cursor::new(wav(3, 1, 32, 400, 0))).is_err());
++        assert!(wav_info(std::io::Cursor::new(b"RIFX\0\0\0\0WAVE".to_vec())).is_err());
++    }
++}
+diff --git a/crates/interchange/src/lib.rs b/crates/interchange/src/lib.rs
+index e8cbc66..15724a5 100644
+--- a/crates/interchange/src/lib.rs
++++ b/crates/interchange/src/lib.rs
+@@ -2,6 +2,8 @@
+ //! Readers supply rational seconds. Endpoints are rounded independently (nearest, ties away
+ //! from zero), so adjacent edits share exactly the same boundary without cumulative drift.
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
++pub mod aaf;
++
+ use serde::{Deserialize, Serialize};
+ use soundcraft_model::{ChannelFormat, Clip, ClipId, Session, Source, SourceId, Track, TrackId, TrackKind};
+ use soundcraft_time::{FrameRate, MAX_POSITION, SampleRate};
+diff --git a/crates/ui-egui/src/aaf_import.rs b/crates/ui-egui/src/aaf_import.rs
+index 858c4db..0651e78 100644
+--- a/crates/ui-egui/src/aaf_import.rs
++++ b/crates/ui-egui/src/aaf_import.rs
+@@ -70,7 +70,7 @@ impl ImportState {
+     }
+     #[cfg(target_arch = "wasm32")]
+     fn analyze(&mut self, _: &egui::Context) {
+-        self.error = Some("AAF import is available in the desktop development build".into());
++        self.error = Some("AAF import needs the desktop app: its media files are read from a local folder".into());
+     }
+ }
+ 
+-- 
+2.48.1
+

@@ -1,10 +1,15 @@
 {
-  "commit": "f8ad3c0083c5414b42719164001ece0a983cfd3a",
+  "commit": "e61391768bac372e2fb08bd5da9dea7b01a536c5",
   "branch": "feat/aaf-session-data",
   "base": "25d52c646aea780c8076ff966076f994ad256221",
   "published": false,
   "checkout": "local-build/upstream-contribution",
   "ci_report": "integration/validation-2026-10-19.json",
-  "bundle": "integration/aaf-session-data.bundle",
-  "bundle_sha256": "584fb2b8540090880daa2fac57d67d4b16a81d8ca3d89f8cc8c03906d371fa03"
+  "bundle": "integration/aaf-session-data-rust-reader.bundle",
+  "bundle_sha256": "584fb2b8540090880daa2fac57d67d4b16a81d8ca3d89f8cc8c03906d371fa03",
+  "previous_commits": [
+    "f8ad3c0083c5414b42719164001ece0a983cfd3a",
+    "7cdae4b"
+  ],
+  "rust_reader_patch": "integration/rust-reader.patch"
 }
