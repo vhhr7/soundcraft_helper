@@ -98,3 +98,13 @@ Se revisaron las dos sesiones abiertas sin cambiar ni guardar el montaje. Median
 - Se observaron ambas ventanas reales. La instancia de SoundCraft visible estaba sin motor de audio (`--no-audio`); no se inició escucha ni grabación. No se valida equivalencia de mezcla, panoramas, automatización o ruteos.
 
 PTSL GetPlaylistElements requiere una API privada que no estaba habilitada; no se habilitó. La EDL pública y GetClipList fueron suficientes para la comparación de montaje y offsets. Las bindings Python omiten un campo nuevo del servidor (`clip_list`), por lo que se conservó y validó la respuesta JSON original. Los archivos de evidencia e informe detallado quedan en `local-tests/protools-comparison/`, ignorado por Git para no incorporar material del usuario. Esto valida la importación básica de esta entrega, no todos los AAF ni la estabilidad continua del DAW.
+
+## Integración gráfica de desarrollo — 19/10/2026
+
+Se compiló SoundCraft 0.9.0 con el overlay nativo del helper. Se abrió un bundle separado y se pulsaron Analyze AAF e Import sobre Pinguino. La API de esa instancia confirmó 22 pistas, 124 clips y 124 fuentes cargadas. Todos los inicios, duraciones, offsets y tamaños de fuente son idénticos al resultado contrastado con Pro Tools. Guardar copia conservó el origen 164324160 muestras; undo quitó toda la importación y redo recuperó las 22 pistas. Se comprobó el mapeo del menú File → Import → Session Data.
+
+Comprobaciones automáticas pasadas: 5 pruebas del constructor Rust, 11 del lector Python, 6 del nuevo comando de motor y 1 de la ventana/menú; fmt y clippy con warnings como errores para helper y para engine/ui/app (todos sus targets). El parche se verifica contra un índice temporal del commit upstream fijado y el script detecta cuando ya está aplicado. Inspección visual de la ventana real, con corrección del alto del panel y retirada de la opción de enlazado persistente.
+
+No se ha ejecutado `cargo xtask ci` completo ni se han validado WASM, otras plataformas, todos los exportadores o una clase de duración completa. La evidencia con audio cargado no certifica la salida acústica del aula. La aplicación instalada y la sesión abierta por el usuario permanecen separadas de estas pruebas. Ver `graphical-import.md` para compilar, usar y continuar.
+
+Repetición con el bundle final: All/Clear actualizan la selección y deshabilitan Import cuando está vacía; Go to first imported clip sitúa el transporte en 8648640 muestras. Save As y reapertura cargaron las 124 fuentes, manteniendo las longitudes completas y las coordenadas de todos los clips. Evidencia: `local-tests/native-import/final-roundtrip.json` y captura `final-montage.png`.

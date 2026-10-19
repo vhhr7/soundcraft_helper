@@ -1,5 +1,5 @@
 """Validate a dedicated SoundCraft instance via its documented local control API.
-Start with --no-audio --control PORT session.scraft; never points at user projects.
+Start a dedicated instance with --control PORT (optionally --no-audio); never use user projects.
 Uses a new output directory. Does not play, record, scan plugins or alter preferences.
 """
 import argparse
@@ -8,7 +8,7 @@ from pathlib import Path
 import socket
 
 
-def validate(port, output):
+def validate(port, output, screenshots=True):
     output = Path(output).resolve()
     output.mkdir(exist_ok=False)
     transcript = []
@@ -39,7 +39,8 @@ def validate(port, output):
         assert all(s['loaded'] and s['frames']==384000 for s in initial['sources'])
         assert initial['sample_rate']==48000 and initial['frame_rate']=='25'
         command('view.zoom_fit', width_px=1600)
-        rpc('ui.screenshot', dict(path=str(output / 'montage.png')))
+        if screenshots:
+            rpc('ui.screenshot', dict(path=str(output / 'montage.png')))
         clip = initial['tracks'][0]['clips'][0]['id']
         command('edit.trim_clip', clip=clip, start=24000, end=168000)
         extended = inspect()
@@ -55,15 +56,21 @@ def validate(port, output):
         assert saved['timecode_start'] == 172800000 and saved['frame_rate'] == 'Fps25'
         assert signature(reopened) == expected
         assert all(s['loaded'] for s in reopened['sources'])
-        rpc('ui.screenshot', dict(path=str(output / 'reopened.png')))
-        print(json.dumps(dict(validated=True, tracks=2, clips=3, media_loaded=2,
-                              trim_both_handles=True, save_copy_reopen=True,
-                              playback_verified=False, audio_disabled=True), indent=2))
+        if screenshots:
+            rpc('ui.screenshot', dict(path=str(output / 'reopened.png')))
+        audio = rpc('ui.inspect', {})
+        summary = dict(validated=True, tracks=2, clips=3, media_loaded=2,
+                       trim_both_handles=True, save_copy_reopen=True,
+                       playback_verified=False, audio_device_reported=audio.get('audio_device'),
+                       screenshots_requested=screenshots)
+        (output / 'summary.json').write_text(json.dumps(summary, indent=2))
+        print(json.dumps(summary, indent=2))
 
 
 if __name__ == '__main__':
     p=argparse.ArgumentParser()
     p.add_argument('--port',type=int,required=True)
     p.add_argument('--output',required=True)
+    p.add_argument('--skip-screenshots', action='store_true', help='Validate model/media without requiring a visible GPU frame')
     a=p.parse_args()
-    validate(a.port,a.output)
+    validate(a.port,a.output,not a.skip_screenshots)

@@ -2,7 +2,7 @@
 
 ## Repositorios e instrucciones
 
-`vhhr7/soundcraft_helper` estaba vacío al clonarlo; este checkout separado conserva su remoto y trabaja en `feat/aaf-import`. El upstream se conserva como submódulo sin cambios. Se leyeron el AGENTS.md del directorio de desarrollo, [AGENTS.md de SoundCraft](../upstream/AGENTS.md), ROADMAP.md, docs/gaps.md, docs/file-format-parity.md y el código del modelo/importación. No se encontraron CONTRIBUTING.md ni AGENTS.md adicionales dentro de upstream. Los archivos locales ignorados `plan/STATUS.md` y `plan/execution-plan.md` no están en el clon.
+`vhhr7/soundcraft_helper` estaba vacío al clonarlo; este checkout separado conserva su remoto y trabaja en `feat/aaf-import`. El upstream conserva su commit fijado; la etapa gráfica añade un overlay de desarrollo reproducible en `integration/soundcraft-aaf.patch`. Se leyeron el AGENTS.md del directorio de desarrollo, [AGENTS.md de SoundCraft](../upstream/AGENTS.md), ROADMAP.md, docs/gaps.md, docs/file-format-parity.md y el código del modelo/importación. No se encontraron CONTRIBUTING.md ni AGENTS.md adicionales dentro de upstream. Los archivos locales ignorados `plan/STATUS.md` y `plan/execution-plan.md` no están en el clon.
 
 El AGENTS.md de upstream remite a `storytold/craftrules`: el clon devolvió `repository not found`; esas reglas adicionales no pudieron leerse. Antes de una contribución upstream se deben recuperar/revisar y correr sus gates. Se respetaron las reglas disponibles: assets originales, no leer recursos de Pro Tools, no código GPL/LGPL, sin `unsafe` ni panics intencionados en producción. No se estudió código de Ardour ni de otros lectores copyleft.
 
@@ -50,4 +50,7 @@ La elección AAF permite probar archivos binarios y fuentes reales con una depen
 
 El lector debe seguir ampliando su inventario de metadatos propietarios: no se ha certificado que detecte todas las formas posibles de ganancia/fades de todos los fabricantes. Las estructuras editoriales desconocidas del árbol soportado abortan; los metadatos que no se leen quedan expresamente fuera de la compatibilidad declarada.
 
-Límites conservadores: AAF ≤512 MiB; plan JSON ≤32 MiB; cada WAV ≤512 MiB en la CLI; ≤100000 elementos principales; profundidad de referencias ≤32; tiempos dentro de MAX_POSITION de SoundCraft. No es todavía un parser sometido a fuzzing ni un entorno aislado para archivos hostiles. Los WAV deben ser de confianza; la selección de medios por locator se limita a archivos locales pero aún no a una carpeta autorizada configurable.
+Límites conservadores: AAF ≤512 MiB; plan JSON ≤32 MiB; cada WAV ≤512 MiB en la CLI; ≤100000 elementos principales; profundidad de referencias ≤32; tiempos dentro de MAX_POSITION de SoundCraft. No es todavía un parser sometido a fuzzing ni un entorno aislado para archivos hostiles. Los WAV deben ser de confianza. La ventana exige una carpeta de medios explícita y el lector comprueba su contención, incluidos symlinks; el motor aplica además sus límites de acceso a archivos.
+
+
+La [etapa gráfica](graphical-import.md) reutiliza este lector y el constructor Rust. Recoge las fuentes completas al guardar como WAV float32: no mantiene identidad binaria/BWF original. La CLI conserva copia byte a byte. Enlazado persistente externo no se ofrece en la ventana.

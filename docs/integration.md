@@ -1,3 +1,5 @@
+> Actualización 2026-10-19: el flujo nativo de desarrollo ya está implementado como overlay sobre el commit fijado. Ver [importación gráfica](graphical-import.md) y `integration/soundcraft-aaf.patch`. Las secciones siguientes conservan la investigación y decisiones iniciales; los pasos de interfaz descritos como futuros se han realizado en esta etapa de desarrollo. La distribución del lector y el traslado del crate siguen pendientes para upstream.
+
 # Arquitectura y siguiente etapa
 
 El prototipo usa dos fronteras y un único constructor. `python/soundcraft_aaf/reader.py` conoce los objetos AAF y produce `Plan` esquema 1. `src/lib.rs::build_session` conoce SoundCraft y transforma ese plan en un `Session` real de upstream; no sabe de Python, AAF binario, UI o archivos. `src/bin/plan-to-session.rs` es el harness de disco para probar el mismo módulo. `scripts/import-aaf.sh` sólo conecta ambas capas.
