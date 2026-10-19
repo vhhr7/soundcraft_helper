@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 docs/app-validation/roundtrip/
 local-tests/
+local-build/
