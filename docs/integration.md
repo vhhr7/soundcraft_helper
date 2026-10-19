@@ -20,13 +20,13 @@ No se genera el formato de sesión a mano. Session::to_json serializa usando los
 ## Estado por etapas
 
 1. Implementación mínima: hecha y probada automáticamente con AAF sintéticos binarios.
-2. Apertura y edición: hecha en la instalación nativa 0.8.0; modelo compilado 0.9.0. Un AAF real de 22 pistas/124 clips también se abrió y pasó la comprobación de medios/offsets, edición de handles y copia/reapertura. Falta ejecutar una build completa 0.9.0 y comparar con Pro Tools.
+2. Apertura y edición: hecha en la instalación nativa 0.8.0; modelo compilado 0.9.0. Un AAF real de 22 pistas/124 clips también se abrió y pasó la comprobación de medios/offsets, edición de handles y copia/reapertura. La comparación independiente con Pro Tools también pasó para los 124 eventos/offsets/handles, sin diferencias en muestras tras igualar el origen. Falta ejecutar una build completa 0.9.0 y comparar la reproducción audible.
 3. Menú de importación: pendiente. No se ha parcheado el motor ni la interfaz de upstream con una dependencia Python no empaquetada. La validación de un subconjunto sintético no resuelve el contrato pure-Rust, el acceso seguro a archivos ni los formatos de exportación reales.
 4. Documentación, fixture y cambios revisables: preparados en este repo. El borrador es para revisar la base, no afirma que AAF esté resuelto en SoundCraft.
 
 ## Continuación concreta, sin reescribir el constructor
 
-1. Probar un AAF real externo mono/estéreo junto con su apertura en Pro Tools. Guardar la exportación original aparte; registrar formato de editor, tasas, slot graph, nombres, locators y elementos rechazados. Añadir un fixture sintético mínimo por cada incompatibilidad encontrada.
+1. Ampliar la prueba real actual (22 pistas mono y 124 clips, ya comparada con Pro Tools) con entregas estéreo y otros exportadores. Guardar la exportación original aparte; registrar formato de editor, tasas, slot graph, nombres, locators y elementos rechazados. Añadir un fixture sintético mínimo por cada incompatibilidad encontrada.
 2. Revisar `craftrules` cuando esté accesible. Confirmar la política pure-Rust al revisar la futura propuesta, sin contactar ahora. Opción A: lector Rust CFB/AAF que emita Plan. Opción B: lector Python opcional en proceso aislado, timeout, límite de salida, runtime empaquetado y ejecución sin shell. Ese lector no tocaría el realtime thread.
 3. Reubicar `src/lib.rs` como `crates/interchange` en SoundCraft (L3: depende del modelo L2, no del engine/UI), convertir dependencias a workspace, registrar en Cargo.toml y en el verificador de capas. Conservar los tests actuales. La CLI del helper pasa a depender de ese crate.
 4. Añadir `file.import_aaf` con nuevo módulo de comandos y una línea en cmd/mod.rs. Leer archivos a través de `Engine`/file_access; validar la carpeta de medios antes de leer locators, impedir accesos remotos inesperados y pasar bytes/metadatos verificados al constructor. No ejecutar procesos desde la librería del modelo.

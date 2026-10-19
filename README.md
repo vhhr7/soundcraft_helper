@@ -2,7 +2,7 @@
 
 Primera etapa funcional, en la rama local `feat/aaf-import`. Lee un subconjunto de AAF reales (binarios CFB), construye una `soundcraft_model::Session` con el módulo Rust reutilizable y escribe una sesión `.scraft` portable con sus WAV completos. **No consolida pistas**: cada corte sigue siendo un clip con offset sobre la fuente.
 
-Validado con AAF sintético original: 2 pistas mono/estéreo, 3 clips, silencios, offsets encadenados y handles. También se importó y abrió un AAF real con 22 pistas, 124 clips y 124 WAV externos mono, usando relink explícito. La sesión abrió en SoundCraft 0.8.0; la aplicación extendió ambos bordes de un clip, guardó una copia y la reabrió con los medios cargados. No se ha comparado todavía el AAF real con Pro Tools ni comprobado reproducción audible o estabilidad durante una clase.
+Validado con AAF sintético original: 2 pistas mono/estéreo, 3 clips, silencios, offsets encadenados y handles. También se importó y abrió un AAF real con 22 pistas, 124 clips y 124 WAV externos mono, usando relink explícito. La sesión abrió en SoundCraft 0.8.0; la aplicación extendió ambos bordes de un clip, guardó una copia y la reabrió con los medios cargados. La comparación independiente con la sesión abierta en Pro Tools coincide para los 124 inicios/finales/duraciones, offsets, archivos fuente y handles (0 muestras de diferencia tras igualar el origen). Sigue pendiente comprobar reproducción audible y estabilidad durante una clase.
 
 ## Preparar y compilar en macOS
 

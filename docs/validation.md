@@ -81,4 +81,20 @@ Se importó una entrega real con 22 slots de audio, 124 SourceClip y 124 WAV mon
 
 Se compararon en la API de SoundCraft los 124 inicios, duraciones y offsets con la sesión generada, y se confirmó `loaded=true` para todos los medios. Las 124 copias de fuentes de la CLI son byte-idénticas a los originales. Se extendió por ambos bordes un clip aislado, se restauró su ventana, se guardó una copia nativa y se reabrió sin perder los valores ni el timecode. Un intento de extender otro clip encontró el límite de su vecino contiguo; no se contó como fallo de handles.
 
-La entrega y sus resultados se mantienen sólo en `local-tests/` (ignorado por Git), sin agregar audio del usuario al repositorio. La captura fue revisada y el montaje quedó abierto para inspección. Todavía falta la comparación independiente en Pro Tools y la escucha; la coincidencia contra el plan no demuestra por sí sola equivalencia con el editor de origen.
+La entrega y sus resultados se mantienen sólo en `local-tests/` (ignorado por Git), sin agregar audio del usuario al repositorio. La captura fue revisada y el montaje quedó abierto para inspección. La coincidencia contra el plan no demuestra por sí sola equivalencia con el editor de origen. Después se realizó la comparación independiente con Pro Tools descrita abajo; sigue pendiente la escucha.
+
+
+## Comparación independiente con Pro Tools abierto
+
+Se revisaron las dos sesiones abiertas sin cambiar ni guardar el montaje. Mediante PTSL se obtuvo el informe público de sesión en muestras y la lista real de clips (JSON original del servidor), y se compararon con `session.inspect` vivo de SoundCraft:
+
+- 22 pistas mono en ambos, 124 eventos colocados en ambos y mismo número de cortes por pista.
+- 124/124 inicios, finales y duraciones coinciden exactamente: **0 muestras de diferencia** después de expresar las posiciones sobre el mismo origen.
+- 124/124 offsets, finales de ventana de fuente, tamaños de fuente y handles antes/después coinciden exactamente.
+- 124/124 asociaciones evento → WAV coinciden; las copias importadas son byte-idénticas a los archivos utilizados por Pro Tools. No hay medios offline ni cambio de mute de clips.
+- Pro Tools muestra 248 entradas en su lista: 124 fuentes completas y 124 recortes; no son 248 eventos colocados.
+- La sesión Pro Tools comienza en 00:00; SoundCraft conserva 00:57:00:00 NDF del AAF (164324160 muestras). Sumar ese origen a sus posiciones locales hace coincidir todos los eventos. No es un desfase del montaje.
+- Nombres de pistas: A1–A22 en Pro Tools frente a Audio 1–Audio 22 en nuestro fallback de slots sin nombre. Pro Tools añade sufijos únicos a los nombres de clips. No se cambió la nomenclatura del usuario.
+- Se observaron ambas ventanas reales. La instancia de SoundCraft visible estaba sin motor de audio (`--no-audio`); no se inició escucha ni grabación. No se valida equivalencia de mezcla, panoramas, automatización o ruteos.
+
+PTSL GetPlaylistElements requiere una API privada que no estaba habilitada; no se habilitó. La EDL pública y GetClipList fueron suficientes para la comparación de montaje y offsets. Las bindings Python omiten un campo nuevo del servidor (`clip_list`), por lo que se conservó y validó la respuesta JSON original. Los archivos de evidencia e informe detallado quedan en `local-tests/protools-comparison/`, ignorado por Git para no incorporar material del usuario. Esto valida la importación básica de esta entrega, no todos los AAF ni la estabilidad continua del DAW.
