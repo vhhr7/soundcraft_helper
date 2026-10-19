@@ -1,0 +1,26 @@
+{
+  "base": "25d52c646aea780c8076ff966076f994ad256221",
+  "sha256": "be5f566ef5541105802fd0eaf3aaa62ad917ae78d416af7c8a83d6e5447580f4",
+  "files": [
+    "Cargo.lock",
+    "Cargo.toml",
+    "apps/soundcraft/src/main.rs",
+    "contributors/people.toml",
+    "crates/engine/Cargo.toml",
+    "crates/engine/src/aaf.rs",
+    "crates/engine/src/cmd/aaf.rs",
+    "crates/engine/src/cmd/mod.rs",
+    "crates/engine/src/io.rs",
+    "crates/engine/src/lib.rs",
+    "crates/engine/tests/aaf_import.rs",
+    "crates/interchange/Cargo.toml",
+    "crates/interchange/README.md",
+    "crates/interchange/src/lib.rs",
+    "crates/ui-egui/src/aaf_import.rs",
+    "crates/ui-egui/src/lib.rs",
+    "crates/ui-egui/src/menus.rs",
+    "xtask/src/main.rs"
+  ],
+  "ci": "pending; run in independent checkout",
+  "reader_packaging": "optional runtime requires maintainer review"
+}

@@ -1,0 +1,25 @@
+{
+  "date": "2026-10-19",
+  "base": "25d52c646aea780c8076ff966076f994ad256221",
+  "contribution_patch_sha256": "be5f566ef5541105802fd0eaf3aaa62ad917ae78d416af7c8a83d6e5447580f4",
+  "gates": {
+    "fmt": "passed",
+    "clippy": "passed",
+    "test": "passed",
+    "assets": "passed",
+    "layers": "passed",
+    "wasm": "passed"
+  },
+  "test_suites": 126,
+  "tests_passed": 1156,
+  "tests_failed": 0,
+  "ignored_by_upstream": 1,
+  "ignored_reason": "upstream h264::deblock::speed::edge_filter_speed benchmark",
+  "additional_test_filters": false,
+  "environment": "macOS Apple Silicon; test process sandbox denies installed VST3 directory reads; fixture plugins permitted",
+  "normal_environment": "blocked loading installed VST3 modules; engine test process terminated after stack capture",
+  "portable_arm64": "bundled reader, GUI import, handles and save/reopen passed; user confirmed audible fixture and both stereo channels",
+  "intel": "runtime self-test under Rosetta only; hardware validation pending; available 2012 Mac uses incompatible macOS 10.8",
+  "release_status": "dev.2 universal DMG built; strict signature valid inside DMG and after extraction and runtime tests; no external dynamic dependencies; no physical Intel validation or notarization",
+  "reader_bytecode_policy": "-I -B for runtime self-test and engine analysis; signed app verified unchanged after both architecture self-tests"
+}

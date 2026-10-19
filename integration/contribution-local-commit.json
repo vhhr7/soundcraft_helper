@@ -1,0 +1,10 @@
+{
+  "commit": "f8ad3c0083c5414b42719164001ece0a983cfd3a",
+  "branch": "feat/aaf-session-data",
+  "base": "25d52c646aea780c8076ff966076f994ad256221",
+  "published": false,
+  "checkout": "local-build/upstream-contribution",
+  "ci_report": "integration/validation-2026-10-19.json",
+  "bundle": "integration/aaf-session-data.bundle",
+  "bundle_sha256": "584fb2b8540090880daa2fac57d67d4b16a81d8ca3d89f8cc8c03906d371fa03"
+}

@@ -1,8 +1,16 @@
 # soundcraft_helper — importación AAF editable
 
-Primera etapa funcional, en la rama local `feat/aaf-import`. Lee un subconjunto de AAF reales (binarios CFB), construye una `soundcraft_model::Session` con el módulo Rust reutilizable y escribe una sesión `.scraft` portable con sus WAV completos. **No consolida pistas**: cada corte sigue siendo un clip con offset sobre la fuente.
+Base funcional con integración gráfica de desarrollo, en la rama local `feat/aaf-import`. Lee un subconjunto de AAF reales (binarios CFB), construye una `soundcraft_model::Session` con el módulo Rust reutilizable y escribe una sesión `.scraft` portable con sus WAV completos. **No consolida pistas**: cada corte sigue siendo un clip con offset sobre la fuente.
 
 Validado con AAF sintético original: 2 pistas mono/estéreo, 3 clips, silencios, offsets encadenados y handles. También se importó y abrió un AAF real con 22 pistas, 124 clips y 124 WAV externos mono, usando relink explícito. La sesión abrió en SoundCraft 0.8.0; la aplicación extendió ambos bordes de un clip, guardó una copia y la reabrió con los medios cargados. La comparación independiente con la sesión abierta en Pro Tools coincide para los 124 inicios/finales/duraciones, offsets, archivos fuente y handles (0 muestras de diferencia tras igualar el origen). Sigue pendiente comprobar reproducción audible y estabilidad durante una clase.
+
+## Nueva importación gráfica
+
+Seguimiento del [RC propio y la contribución upstream en paralelo](docs/rc-and-upstream.md). Ya hay una app portable ARM64 de desarrollo con lector incluido; el universal y las pruebas Intel físicas siguen pendientes.
+
+Hay una compilación aislada **SoundCraft AAF Preview**, basada en SoundCraft 0.9.0, con **File → Import → Session Data...**: análisis AAF, selección de pistas, carpeta de medios, mapeo de timecode, offset y reporte. Usa el mismo módulo Rust del CLI. Ver [pasos para abrir, compilar y validar](docs/graphical-import.md).
+
+En el AAF real, el flujo gráfico produjo las mismas 22 pistas, 124 clips y 124 fuentes que la comparación con Pro Tools, con medios cargados, guardar copia y undo/redo. La aplicación instalada no se reemplaza. Se entrega como overlay revisable; el runtime Python opcional y el traslado del crate al workspace requieren acuerdo antes de aportar upstream.
 
 ## Preparar y compilar en macOS
 
