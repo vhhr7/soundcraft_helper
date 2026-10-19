@@ -40,6 +40,15 @@ Esos directorios son temporales; para trabajar después de un reinicio usar la i
 ./scripts/import-aaf.sh '/ruta/montaje.aaf' '/ruta/Sesión nueva'
 ```
 
+En macOS 0.8.0, `open -a SoundCraft archivo.scraft` puede mostrar “cannot open files” por el mecanismo de apertura de documentos del sistema. Para esta prueba, iniciar directamente el ejecutable con la ruta como argumento:
+
+```sh
+/Applications/SoundCraft.app/Contents/MacOS/SoundCraft --no-audio \
+  "$PWD/demo/Sesión SoundCraft/session.scraft"
+```
+
+Este comando permite revisar pistas, cortes y handles sin activar la salida de audio. Para una escucha posterior, omitir `--no-audio`. Mantener esa Terminal abierta mientras se usa esta instancia. Para otra sesión, reemplazar la última ruta por su ruta absoluta.
+
 El destino **no debe existir**. La salida contiene `session.scraft`, `import-report.json` y `Audio Files/` con copias completas de las fuentes, sin modificar los originales. Abrir `session.scraft` en SoundCraft. El reporte enumera advertencias y handles en muestras. Si falla la publicación puede quedar un directorio nuevo incompleto, identificado como tal por el error; no se reutiliza automáticamente.
 
 Para inspeccionar las dos capas por separado o escoger composición por MobID:
