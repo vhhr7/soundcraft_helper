@@ -1,36 +1,71 @@
-From e61391768bac372e2fb08bd5da9dea7b01a536c5 Mon Sep 17 00:00:00 2001
+From 0b7d1be16bc3b18253fbad4fbe81ef238622216e Mon Sep 17 00:00:00 2001
 From: Vic Herrera <126992509+vhhr7@users.noreply.github.com>
-Date: Mon, 19 Oct 2026 18:42:37 -0500
-Subject: [PATCH] Read AAF in pure Rust instead of an external Python reader
+Date: Mon, 19 Oct 2026 19:14:51 -0500
+Subject: [PATCH 1/4] Import external-WAV AAF as editable session data
 
-The interchange crate now reads the AAF object model directly from structured
-storage with the cfb crate (MIT): properties streams, strong reference
-vectors/sets and dictionary weak references. It keeps the same Plan contract
-and rules as the earlier pyaaf2 prototype and produced identical plans on the
-synthetic fixture, twelve edited variants and a real 22-track/124-edit AAF.
+File > Import > Session Data analyzes an AAF and imports the selected audio
+tracks as new tracks, one clip per edit. Clips keep their offset into the
+complete source, so handles stay available; the import is one undo step and
+Save collects the full sources.
 
-The engine resolves locators only to files named in the chosen media folder,
-checks file_access and reads WAV headers without loading samples. The
-SOUNDCRAFT_AAF_PYTHON/READER subprocess, its timeout and output limits are gone.
+crates/interchange (layer 3, no filesystem/process/UI access):
+- build_session(Plan): versioned rational-time plan -> Session. Endpoints are
+  rounded to samples independently, so adjacent edits never drift.
+- aaf::read_aaf: reads the AAF object model from structured storage with the
+  cfb crate (MIT): properties streams, strong reference vectors/sets and
+  dictionary weak references. Media goes through a MediaResolver trait.
+
+crates/engine: file.preview_aaf (read-only) and file.import_aaf (undoable).
+The resolver opens only files named in the chosen media folder, checks
+file_access and reads WAV headers without loading samples; import re-probes
+and decodes before touching the session.
+
+crates/ui-egui: Session Data window with track selection, media folder,
+absolute/relative mapping, sample offset and report.
+
+Supported: SourceClip/Filler sequences resolved through MasterMobs to
+WAVEDescriptor SourceMobs with one external locator; mono/stereo PCM WAV;
+composition timecode including 24000/1001 and drop-frame. Gain, fades,
+transitions, selectors, nested sequences, embedded essence, split channels,
+mixed sample rates and non-local locators fail explicitly.
+
+Addresses #40.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 ---
- Cargo.lock                                    |  12 +
- Cargo.toml                                    |   2 +
- crates/engine/src/io.rs                       | 129 +--
- crates/engine/tests/aaf_import.rs             |  61 ++
+ Cargo.lock                                    |  25 +
+ Cargo.toml                                    |   3 +
+ apps/soundcraft/src/main.rs                   |   3 +
+ contributors/people.toml                      |   4 +
+ crates/engine/Cargo.toml                      |   1 +
+ crates/engine/src/aaf.rs                      | 151 +++
+ crates/engine/src/cmd/aaf.rs                  |  29 +
+ crates/engine/src/cmd/mod.rs                  |   2 +
+ crates/engine/src/io.rs                       | 109 +++
+ crates/engine/src/lib.rs                      |   1 +
+ crates/engine/tests/aaf_import.rs             | 199 ++++
  .../tests/fixtures/synthetic-two-tracks.aaf   | Bin 0 -> 462848 bytes
- crates/interchange/Cargo.toml                 |   1 +
- crates/interchange/README.md                  |  17 +-
+ crates/interchange/Cargo.toml                 |  20 +
+ crates/interchange/README.md                  |  15 +
  crates/interchange/src/aaf.rs                 | 917 ++++++++++++++++++
- crates/interchange/src/lib.rs                 |   2 +
- crates/ui-egui/src/aaf_import.rs              |   2 +-
- 10 files changed, 1081 insertions(+), 62 deletions(-)
+ crates/interchange/src/lib.rs                 | 287 ++++++
+ crates/ui-egui/src/aaf_import.rs              | 264 +++++
+ crates/ui-egui/src/lib.rs                     |   4 +
+ crates/ui-egui/src/menus.rs                   |  13 +
+ xtask/src/main.rs                             |   1 +
+ 20 files changed, 2048 insertions(+)
+ create mode 100644 crates/engine/src/aaf.rs
+ create mode 100644 crates/engine/src/cmd/aaf.rs
+ create mode 100644 crates/engine/tests/aaf_import.rs
  create mode 100644 crates/engine/tests/fixtures/synthetic-two-tracks.aaf
+ create mode 100644 crates/interchange/Cargo.toml
+ create mode 100644 crates/interchange/README.md
  create mode 100644 crates/interchange/src/aaf.rs
+ create mode 100644 crates/interchange/src/lib.rs
+ create mode 100644 crates/ui-egui/src/aaf_import.rs
 
 diff --git a/Cargo.lock b/Cargo.lock
-index 770b014..40d4e13 100644
+index 5ab3653..40d4e13 100644
 --- a/Cargo.lock
 +++ b/Cargo.lock
 @@ -657,6 +657,17 @@ dependencies = [
@@ -51,19 +86,47 @@ index 770b014..40d4e13 100644
  [[package]]
  name = "cfg-if"
  version = "1.0.5"
-@@ -3683,6 +3694,7 @@ dependencies = [
- name = "soundcraft-interchange"
- version = "0.9.0"
- dependencies = [
-+ "cfb",
-  "serde",
-  "serde_json",
+@@ -3668,6 +3679,7 @@ dependencies = [
   "soundcraft-audio-io",
+  "soundcraft-clap-host",
+  "soundcraft-dsp",
++ "soundcraft-interchange",
+  "soundcraft-midi",
+  "soundcraft-mix",
+  "soundcraft-model",
+@@ -3678,6 +3690,19 @@ dependencies = [
+  "zip",
+ ]
+ 
++[[package]]
++name = "soundcraft-interchange"
++version = "0.9.0"
++dependencies = [
++ "cfb",
++ "serde",
++ "serde_json",
++ "soundcraft-audio-io",
++ "soundcraft-model",
++ "soundcraft-time",
++ "thiserror 2.0.21",
++]
++
+ [[package]]
+ name = "soundcraft-midi"
+ version = "0.9.0"
 diff --git a/Cargo.toml b/Cargo.toml
-index 6448508..869bdab 100644
+index 65b8ea5..869bdab 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -39,6 +39,8 @@ proptest = "1"
+@@ -12,6 +12,7 @@ repository = "https://github.com/storytold/soundcraft"
+ 
+ [workspace.dependencies]
+ # internal
++soundcraft-interchange = { path = "crates/interchange" }
+ soundcraft-time = { path = "crates/time" }
+ soundcraft-audio-io = { path = "crates/audio-io" }
+ soundcraft-midi = { path = "crates/midi" }
+@@ -38,6 +39,8 @@ proptest = "1"
  # audio
  symphonia = { version = "0.5", default-features = false, features = ["mp3", "flac", "vorbis", "ogg", "wav", "pcm", "aiff", "isomp4", "aac", "alac", "adpcm", "caf", "mkv"] }
  rustfft = "6"
@@ -72,69 +135,299 @@ index 6448508..869bdab 100644
  # Session bundles (one file holding a session and its audio, for the browser): stored entries only.
  zip = { version = "9", default-features = false }
  cpal = "0.16"
+diff --git a/apps/soundcraft/src/main.rs b/apps/soundcraft/src/main.rs
+index 808cdef..1f3ec8b 100644
+--- a/apps/soundcraft/src/main.rs
++++ b/apps/soundcraft/src/main.rs
+@@ -109,6 +109,8 @@ fn open_path(app: &mut SoundApp, p: &str) {
+     let lower = p.to_ascii_lowercase();
+     let r = if lower.ends_with(".scraft") {
+         dialogs::run_or_ask(app, "session.open", serde_json::json!({"path": p}))
++    } else if lower.ends_with(".aaf") {
++        app.run("window.import_aaf", serde_json::json!({"path":p}))
+     } else if lower.ends_with(".mid") || lower.ends_with(".midi") || lower.ends_with(".smf") {
+         app.run("file.import_midi", serde_json::json!({"path": p}))
+     } else {
+@@ -165,6 +167,7 @@ fn services() -> Services {
+             let d = rfd::FileDialog::new();
+             let d = match purpose {
+                 "session.open" => d.add_filter("SoundCraft Session", &["scraft"]),
++                "file.import_aaf" => d.add_filter("AAF session data", &["aaf"]),
+                 "file.import_midi" => d.add_filter("MIDI", &["mid", "midi", "smf"]),
+                 _ => d.add_filter(
+                     "Audio",
+diff --git a/contributors/people.toml b/contributors/people.toml
+index 7799757..53c1f7d 100644
+--- a/contributors/people.toml
++++ b/contributors/people.toml
+@@ -55,3 +55,7 @@ sync_github_name = true
+ real_name = "Marco Arnulfo"
+ display_name = "Marco Arnulfo"
+ sync_github_name = false
++
++# Display name explicitly chosen by the contributor on 2026-10-19.
++[people.vhhr7]
++display_name = "Vic Herrera (@vhhr)"
+diff --git a/crates/engine/Cargo.toml b/crates/engine/Cargo.toml
+index 48a0340..807ca7e 100644
+--- a/crates/engine/Cargo.toml
++++ b/crates/engine/Cargo.toml
+@@ -8,6 +8,7 @@ rust-version.workspace = true
+ repository.workspace = true
+ 
+ [dependencies]
++soundcraft-interchange.workspace = true
+ soundcraft-time.workspace = true
+ soundcraft-audio-io.workspace = true
+ soundcraft-midi.workspace = true
+diff --git a/crates/engine/src/aaf.rs b/crates/engine/src/aaf.rs
+new file mode 100644
+index 0000000..39025e0
+--- /dev/null
++++ b/crates/engine/src/aaf.rs
+@@ -0,0 +1,151 @@
++//! AAF boundary: the reusable interchange crate constructs the source document, then this module
++//! verifies and decodes media and maps new tracks into the destination as one undoable edit.
++use crate::{EngineError, Result};
++use serde_json::{Value, json};
++use soundcraft_interchange::{Plan, build_session};
++use soundcraft_model::{ClipContent, ClipId, Session, SourceAudio, SourceId, TrackId};
++use soundcraft_time::MAX_POSITION;
++use std::{
++    collections::{HashMap, HashSet},
++    path::Path,
++    sync::Arc,
++};
++
++fn bad(message: impl Into<String>) -> EngineError {
++    EngineError::Io(message.into())
++}
++
++pub fn preview(path: &str, media_dir: &str, composition: Option<&str>) -> Result<Value> {
++    let plan = crate::io::read_aaf_plan(path, media_dir, composition)?;
++    let parsed: Plan = serde_json::from_value(plan.clone()).map_err(|e| bad(e.to_string()))?;
++    let built = build_session(parsed).map_err(|e| bad(e.to_string()))?;
++    let s = built.session;
++    let tracks: Vec<_> = s
++        .tracks
++        .iter()
++        .enumerate()
++        .map(|(index, t)| json!({"index": index, "name": t.name, "channels": t.channels(), "clips": t.clips().len()}))
++        .collect();
++    Ok(json!({"plan": plan, "name": s.name, "sample_rate": s.sample_rate.hz(), "frame_rate": s.frame_rate.label(),
++        "timecode_start": s.timecode_start, "start_timecode": s.format_position(0, soundcraft_time::TimeFormat::Timecode),
++        "sources": s.sources.len(), "tracks": tracks, "warnings": built.report.warnings}))
++}
++
++/// No destination mutation until all options, times and decoded source files have been checked.
++pub fn import_into(destination: &Session, params: &Value) -> Result<(Session, Value)> {
++    let plan_value = params.get("plan").ok_or_else(|| bad("`plan` from file.preview_aaf is required"))?;
++    let mut plan: Plan = serde_json::from_value(plan_value.clone()).map_err(|e| bad(e.to_string()))?;
++    let indices = params.get("selected").and_then(Value::as_array).ok_or_else(|| bad("`selected` track indices required"))?;
++    let mut selected = HashSet::new();
++    for v in indices {
++        let n =
++            v.as_u64().and_then(|n| usize::try_from(n).ok()).filter(|n| *n < plan.tracks.len()).ok_or_else(|| bad("invalid source track index"))?;
++        if !selected.insert(n) {
++            return Err(bad("duplicate source track selection"));
++        }
++    }
++    if selected.is_empty() {
++        return Err(bad("select at least one source track"));
++    }
++    let mut i = 0;
++    plan.tracks.retain(|_| {
++        let keep = selected.contains(&i);
++        i += 1;
++        keep
++    });
++    let used: HashSet<String> = plan.tracks.iter().flat_map(|t| t.clips.iter().map(|c| c.source.clone())).collect();
++    plan.sources.retain(|s| used.contains(&s.key));
++    let built = build_session(plan).map_err(|e| bad(e.to_string()))?;
++    let mut incoming = built.session;
++    let media = params.get("media").and_then(Value::as_str).unwrap_or("copy");
++    if media != "copy" {
++        return Err(bad("only full-source copy is supported; external linking is not preserved by Save Session"));
++    }
++    let mapping = params.get("mapping").and_then(Value::as_str).unwrap_or("absolute");
++    if !matches!(mapping, "absolute" | "relative") {
++        return Err(bad("mapping must be absolute or relative"));
++    }
++    let offset = match params.get("offset_samples") {
++        None => 0,
++        Some(v) => v.as_i64().filter(|n| n.abs_diff(0) <= MAX_POSITION as u64).ok_or_else(|| bad("invalid track offset in samples"))?,
++    };
++    let empty = destination.tracks.is_empty() && destination.sources.is_empty();
++    if !empty && incoming.sample_rate != destination.sample_rate {
++        return Err(bad("sample rates differ; sample-rate conversion is not implemented"));
++    }
++    let origin = if empty { incoming.timecode_start } else { destination.timecode_start };
++    let shift = if mapping == "absolute" { incoming.timecode_start.checked_sub(origin) } else { Some(0) }
++        .and_then(|n| n.checked_add(offset))
++        .ok_or_else(|| bad("time mapping overflow"))?;
++    for t in &mut incoming.tracks {
++        for c in &mut t.playlist_mut().ok_or_else(|| bad("source playlist missing"))?.clips {
++            c.start = c
++                .start
++                .checked_add(shift)
++                .filter(|n| *n >= 0 && *n <= MAX_POSITION)
++                .ok_or_else(|| bad("mapped clip precedes session start or exceeds time limit; choose relative mapping or another offset"))?;
++            if c.start.checked_add(c.length).is_none_or(|n| n > MAX_POSITION) {
++                return Err(bad("mapped end exceeds time limit"));
++            }
++        }
++    }
++    let mut total_samples = 0u64;
++    for src in &incoming.sources {
++        if !Path::new(&src.path).is_absolute() {
++            return Err(bad("source paths must be absolute"));
++        }
++        total_samples = total_samples
++            .checked_add(src.frames.saturating_mul(u64::from(src.channels)))
++            .filter(|n| *n <= 1 << 27)
++            .ok_or_else(|| bad("selected media exceeds the decoded import memory limit (512 MiB)"))?;
++        let bytes = crate::io::read_interchange_file(Path::new(&src.path), 512 * 1024 * 1024)?;
++        let info = soundcraft_audio_io::probe(&bytes, Some("wav")).map_err(|e| bad(e.to_string()))?;
++        if (info.sample_rate, info.channels, info.frames) != (src.sample_rate, src.channels, src.frames)
++            || info.format != soundcraft_audio_io::FileFormat::Wav
++        {
++            return Err(bad(format!("media changed since analysis: {}", src.path)));
++        }
++        let (_, buffer) = soundcraft_audio_io::decode(&bytes, Some("wav")).map_err(|e| bad(e.to_string()))?;
++        incoming.pool.insert(src.id, Arc::new(SourceAudio::new(buffer)));
++    }
++    let mut target = destination.clone();
++    if empty {
++        target.sample_rate = incoming.sample_rate;
++        target.frame_rate = incoming.frame_rate;
++        target.timecode_start = incoming.timecode_start;
++        if target.name == "Untitled" {
++            target.name = incoming.name.clone();
++        }
++    }
++    let mut source_ids = HashMap::new();
++    for mut src in incoming.sources {
++        let old = src.id;
++        src.id = SourceId(target.alloc());
++        let audio = incoming.pool.get(old).ok_or_else(|| bad("decoded media missing"))?.clone();
++        target.pool.insert(src.id, audio);
++        source_ids.insert(old, src.id);
++        // Save writes the whole decoded source into the destination Audio Files folder.
++        src.unsaved = true;
++        target.sources.push(src);
++    }
++    let mut track_ids = Vec::new();
++    for mut track in incoming.tracks {
++        track.id = TrackId(target.alloc());
++        track.name = target.unique_track_name(&track.name);
++        let name = track.name.clone();
++        for playlist in &mut track.playlists {
++            playlist.name = name.clone();
++            for clip in &mut playlist.clips {
++                clip.id = ClipId(target.alloc());
++                if let ClipContent::Audio { source, .. } = &mut clip.content {
++                    *source = *source_ids.get(source).ok_or_else(|| bad("source mapping missing"))?;
++                }
++            }
++        }
++        track_ids.push(track.id);
++        target.tracks.push(track);
++    }
++    let first_clip = target.tracks.iter().filter(|t| track_ids.contains(&t.id)).flat_map(|t| t.clips()).map(|c| c.start).min();
++    let report = json!({"first_clip_sample":first_clip,"tracks":track_ids,"sources":source_ids.len(),"warnings":built.report.warnings,"handles":built.report.handles,"mapping":mapping,"shift_samples":shift,"media":media});
++    Ok((target, report))
++}
+diff --git a/crates/engine/src/cmd/aaf.rs b/crates/engine/src/cmd/aaf.rs
+new file mode 100644
+index 0000000..d996604
+--- /dev/null
++++ b/crates/engine/src/cmd/aaf.rs
+@@ -0,0 +1,29 @@
++use super::*;
++use crate::cmd;
++
++pub fn specs() -> Vec<CommandSpec> {
++    vec![
++        cmd!(query "file.preview_aaf", "Analyze AAF", [], None, "{path, media_dir, composition?} — read-only plan and source properties", always, |_,p| {
++            let path = str_param(p,"path").ok_or_else(|| bad("file.preview_aaf","path required"))?;
++            let media = str_param(p,"media_dir").ok_or_else(|| bad("file.preview_aaf","media_dir required"))?;
++            crate::aaf::preview(path,media,str_param(p,"composition"))
++        }),
++        cmd!(
++            "file.import_aaf",
++            "Session Data (AAF)...",
++            ["File", "Import"],
++            None,
++            "{plan, selected:[track indices], media?: copy, mapping?: absolute|relative, offset_samples?: 0} — new tracks, full source handles, undoable",
++            stopped,
++            |e, p| {
++                stopped(e).map_err(|why| bad("file.import_aaf", why))?;
++                let (session, report) = crate::aaf::import_into(e.session(), p)?;
++                *e.session_mut() = session;
++                Ok(report)
++            }
++        ),
++    ]
++}
++fn stopped(e: &Engine) -> std::result::Result<(), String> {
++    if e.transport.playing || e.transport.recording { Err("Stop playback and recording before importing session data".into()) } else { Ok(()) }
++}
+diff --git a/crates/engine/src/cmd/mod.rs b/crates/engine/src/cmd/mod.rs
+index b6f379b..1f683c2 100644
+--- a/crates/engine/src/cmd/mod.rs
++++ b/crates/engine/src/cmd/mod.rs
+@@ -6,6 +6,7 @@ use soundcraft_model::{ClipId, TrackId};
+ use soundcraft_time::{Range, Samples};
+ use std::sync::OnceLock;
+ 
++mod aaf;
+ mod audio_midi;
+ mod audiosuite;
+ mod clap;
+@@ -107,6 +108,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
+     SPECS.get_or_init(|| {
+         let mut v = Vec::new();
+         v.extend(file::specs());
++        v.extend(aaf::specs());
+         v.extend(edit::specs());
+         v.extend(edit_more::specs());
+         v.extend(view::specs());
 diff --git a/crates/engine/src/io.rs b/crates/engine/src/io.rs
-index 3a55546..ef762ac 100644
+index eff105e..ef762ac 100644
 --- a/crates/engine/src/io.rs
 +++ b/crates/engine/src/io.rs
-@@ -2203,76 +2203,95 @@ pub(crate) fn read_interchange_file(path: &Path, limit: u64) -> Result<Vec<u8>>
-     Ok(bytes)
+@@ -2186,3 +2186,112 @@ mod bundle_tests {
+         let _ = std::fs::remove_file(&p);
+     }
  }
- 
--/// The optional AAF reader is isolated from construction of the session. It receives only a
--/// user-chosen local file and relink folder; Python enforces that every referenced WAV is in it.
++
++/// Bounded, root-checked media read for interchange imports.
++pub(crate) fn read_interchange_file(path: &Path, limit: u64) -> Result<Vec<u8>> {
++    use std::io::Read;
++    crate::file_access::check_read(path).map_err(EngineError::Io)?;
++    let meta = std::fs::metadata(path).map_err(|e| EngineError::Io(e.to_string()))?;
++    if !meta.is_file() || meta.len() > limit {
++        return Err(EngineError::Io(format!("{}: not a regular file or exceeds import byte limit", path.display())));
++    }
++    let mut bytes = Vec::new();
++    std::fs::File::open(path).and_then(|f| f.take(limit.saturating_add(1)).read_to_end(&mut bytes)).map_err(|e| EngineError::Io(e.to_string()))?;
++    if bytes.len() as u64 > limit {
++        return Err(EngineError::Io("media exceeds import byte limit".into()));
++    }
++    Ok(bytes)
++}
++
 +/// Reads an AAF with the pure-Rust interchange reader. Only the user-chosen AAF and media folder
 +/// are opened; every referenced WAV must be named in that folder (exact name, no search).
- #[cfg(not(target_arch = "wasm32"))]
- pub(crate) fn read_aaf_plan(path: &str, media_dir: &str, composition: Option<&str>) -> Result<Value> {
--    use std::{
--        io::Read,
--        process::{Command, Stdio},
--        time::{Duration, Instant},
--    };
++#[cfg(not(target_arch = "wasm32"))]
++pub(crate) fn read_aaf_plan(path: &str, media_dir: &str, composition: Option<&str>) -> Result<Value> {
 +    use soundcraft_interchange::aaf::{AafOptions, read_aaf};
-     crate::file_access::check_read(path).map_err(EngineError::Io)?;
-     crate::file_access::check_read(media_dir).map_err(EngineError::Io)?;
-     let meta = std::fs::metadata(path).map_err(|e| EngineError::Io(e.to_string()))?;
-     if !meta.is_file() || meta.len() > 512 * 1024 * 1024 || !Path::new(media_dir).is_dir() {
-         return Err(EngineError::Io("choose an AAF file (at most 512 MiB) and its media folder".into()));
-     }
--    let python = std::env::var_os("SOUNDCRAFT_AAF_PYTHON")
--        .ok_or_else(|| EngineError::Io("AAF reader is not configured. Launch the SoundCraft AAF development build.".into()))?;
--    let script = std::env::var_os("SOUNDCRAFT_AAF_READER").ok_or_else(|| EngineError::Io("AAF reader script is not configured".into()))?;
--    let mut command = Command::new(python);
--    command
--        .arg("-I")
--        .arg("-B")
--        .arg(script)
--        .arg(path)
--        .arg("--media-dir")
--        .arg(media_dir)
--        .stdin(Stdio::null())
--        .stdout(Stdio::piped())
--        .stderr(Stdio::piped());
--    if let Some(id) = composition {
--        command.arg("--composition").arg(id);
--    }
--    let mut child = command.spawn().map_err(|e| EngineError::Io(format!("cannot start AAF reader: {e}")))?;
--    let stdout = child.stdout.take().ok_or_else(|| EngineError::Io("reader stdout unavailable".into()))?;
--    let stderr = child.stderr.take().ok_or_else(|| EngineError::Io("reader stderr unavailable".into()))?;
--    let out = std::thread::spawn(move || {
--        let mut b = Vec::new();
--        stdout.take(32 * 1024 * 1024 + 1).read_to_end(&mut b).map(|_| b)
--    });
--    let err = std::thread::spawn(move || {
--        let mut b = Vec::new();
--        stderr.take(64 * 1024 + 1).read_to_end(&mut b).map(|_| b)
--    });
--    let start = Instant::now();
--    let status = loop {
--        match child.try_wait() {
--            Ok(Some(status)) => break Some(status),
--            Ok(None) if start.elapsed() < Duration::from_secs(45) => std::thread::sleep(Duration::from_millis(20)),
--            _ => {
--                let _ = child.kill();
--                let _ = child.wait();
--                break None;
++    crate::file_access::check_read(path).map_err(EngineError::Io)?;
++    crate::file_access::check_read(media_dir).map_err(EngineError::Io)?;
++    let meta = std::fs::metadata(path).map_err(|e| EngineError::Io(e.to_string()))?;
++    if !meta.is_file() || meta.len() > 512 * 1024 * 1024 || !Path::new(media_dir).is_dir() {
++        return Err(EngineError::Io("choose an AAF file (at most 512 MiB) and its media folder".into()));
++    }
 +    let aaf = std::fs::canonicalize(path).map_err(|e| EngineError::Io(e.to_string()))?;
 +    let media_dir = std::fs::canonicalize(media_dir).map_err(|e| EngineError::Io(e.to_string()))?;
 +    let base = aaf.parent().map(Path::to_path_buf).unwrap_or_default();
@@ -169,23 +462,16 @@ index 3a55546..ef762ac 100644
 +                }
 +                let from = (chosen != source).then(|| source.display().to_string());
 +                (resolved, from)
-             }
++            }
 +        };
 +        if !path.is_file() {
 +            return Err(MediaError::Missing(path.display().to_string()));
-         }
--    };
--    let bytes = out.join().map_err(|_| EngineError::Io("reader output failed".into()))?.map_err(|e| EngineError::Io(e.to_string()))?;
--    let errors = err.join().map_err(|_| EngineError::Io("reader diagnostics failed".into()))?.map_err(|e| EngineError::Io(e.to_string()))?;
--    if status.is_none() {
--        return Err(EngineError::Io("AAF reader timed out or could not be monitored (45 s limit)".into()));
++        }
 +        crate::file_access::check_read(&path).map_err(MediaError::Invalid)?;
 +        let file = std::fs::File::open(&path).map_err(|e| MediaError::Invalid(format!("{}: {e}", path.display())))?;
 +        let info = wav_info(std::io::BufReader::new(file)).map_err(|e| MediaError::Invalid(format!("{}: {e}", path.display())))?;
 +        Ok(MediaInfo { path: path.display().to_string(), relinked_from, channels: info.channels, frames: info.frames, sample_rate: info.sample_rate })
-     }
--    if !status.is_some_and(|s| s.success()) {
--        return Err(EngineError::Io(String::from_utf8_lossy(&errors).trim().to_string()));
++    }
 +}
 +
 +/// `realpath` without requiring the path to exist: the longest existing prefix is canonical
@@ -202,9 +488,7 @@ index 3a55546..ef762ac 100644
 +            }
 +            other => lexical.push(other),
 +        }
-     }
--    if bytes.len() > 32 * 1024 * 1024 {
--        return Err(EngineError::Io("AAF plan exceeds 32 MiB".into()));
++    }
 +    let mut tail = Vec::new();
 +    let mut prefix = lexical.as_path();
 +    loop {
@@ -218,23 +502,169 @@ index 3a55546..ef762ac 100644
 +            }
 +            _ => return lexical,
 +        }
-     }
--    serde_json::from_slice(&bytes).map_err(|e| EngineError::Io(format!("invalid AAF plan: {e}")))
- }
- 
- #[cfg(target_arch = "wasm32")]
- pub(crate) fn read_aaf_plan(_: &str, _: &str, _: Option<&str>) -> Result<Value> {
--    Err(EngineError::Io("AAF reader is available only in the desktop development build".into()))
++    }
++}
++
++#[cfg(target_arch = "wasm32")]
++pub(crate) fn read_aaf_plan(_: &str, _: &str, _: Option<&str>) -> Result<Value> {
 +    Err(EngineError::Io("AAF import needs the desktop app: its media files are read from a local folder".into()))
- }
++}
+diff --git a/crates/engine/src/lib.rs b/crates/engine/src/lib.rs
+index 03d173d..7a4ba32 100644
+--- a/crates/engine/src/lib.rs
++++ b/crates/engine/src/lib.rs
+@@ -5,6 +5,7 @@
+ //! The engine owns the [`Session`] behind an `Arc` (copy-on-write), so undo snapshots are cheap.
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
++pub mod aaf;
+ pub mod autosave;
+ pub mod catalog;
+ pub mod catalog_more;
 diff --git a/crates/engine/tests/aaf_import.rs b/crates/engine/tests/aaf_import.rs
-index ee0bd9a..c6fc34e 100644
---- a/crates/engine/tests/aaf_import.rs
+new file mode 100644
+index 0000000..c6fc34e
+--- /dev/null
 +++ b/crates/engine/tests/aaf_import.rs
-@@ -136,3 +136,64 @@ fn playing_import_cannot_bypass_the_transport_guard_with_target_params() {
-     assert!(e.execute("file.import_aaf", &p).is_err());
-     assert_eq!(e.session().tracks.len(), 1);
- }
+@@ -0,0 +1,199 @@
++use serde_json::{Value, json};
++use soundcraft_audio_io::{AudioBuffer, BitDepth, EncodeOptions, FileFormat};
++use soundcraft_engine::{Engine, file_access};
++use soundcraft_model::{ChannelFormat, Session, TrackKind};
++use soundcraft_time::SampleRate;
++use std::{
++    path::PathBuf,
++    sync::atomic::{AtomicU64, Ordering},
++};
++
++struct Fixture {
++    dir: PathBuf,
++    params: Value,
++}
++impl Fixture {
++    fn new() -> Self {
++        static NEXT: AtomicU64 = AtomicU64::new(0);
++        let dir = std::env::temp_dir().join(format!("soundcraft-aaf-{}-{}", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
++        std::fs::create_dir(&dir).unwrap();
++        let path = dir.join("Source á with spaces.wav");
++        let mut ch = vec![0.0; 480000];
++        ch[96000] = 0.5;
++        let bytes = soundcraft_audio_io::encode(
++            &AudioBuffer { sample_rate: 48000, channels: vec![ch] },
++            &EncodeOptions { format: FileFormat::Wav, bit_depth: BitDepth::Int16, dither: false, bwf: None },
++        )
++        .unwrap();
++        std::fs::write(&path, bytes).unwrap();
++        let params = json!({"plan":{"schema_version":1,"name":"AAF test","sample_rate":48000,"timecode_start":[3600,1],"frame_rate":{"rate":[25,1],"drop":false},"warnings":["Test warning"],
++            "sources":[{"key":"source","name":"Original source","path":path,"channels":1,"frames":480000,"sample_rate":48000}],
++            "tracks":[{"name":"DX","channels":1,"clips":[{"name":"Cut","source":"source","start":[1,1],"end":[3,1],"offset":[2,1]}]},
++                      {"name":"Empty","channels":1,"clips":[]}]},"selected":[0],"mapping":"absolute","media":"copy","offset_samples":0});
++        Self { dir, params }
++    }
++}
++impl Drop for Fixture {
++    fn drop(&mut self) {
++        let _ = std::fs::remove_dir_all(&self.dir);
++    }
++}
++fn existing() -> Engine {
++    let mut s = Session::new("Existing", SampleRate::HZ_48000);
++    s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Keep"));
++    Engine::new(s)
++}
++#[test]
++fn absolute_mapping_preserves_source_window_and_is_one_undo_step() {
++    let f = Fixture::new();
++    let mut e = existing();
++    let before = e.session().to_json().unwrap();
++    let report = e.execute("file.import_aaf", &f.params).unwrap();
++    assert_eq!(report["tracks"].as_array().unwrap().len(), 1);
++    assert_eq!(e.session().tracks.len(), 2);
++    let c = &e.session().tracks[1].clips()[0];
++    assert_eq!((c.start, c.length, c.source_offset()), (172848000, 96000, 96000));
++    assert_eq!(e.session().sources[0].frames, 480000);
++    assert!(e.session().sources[0].unsaved);
++    let source = c.source().unwrap();
++    assert_eq!(e.session().pool.get(source).unwrap().channel(0).unwrap()[96000], 0.5);
++    assert_eq!(e.undo_label(), Some("Session Data (AAF)..."));
++    e.execute("edit.undo", &json!({})).unwrap();
++    assert_eq!(e.session().to_json().unwrap(), before);
++}
++#[test]
++fn relative_mapping_and_track_selection_do_not_replace_existing_tracks() {
++    let mut f = Fixture::new();
++    let mut e = existing();
++    f.params["mapping"] = json!("relative");
++    f.params["offset_samples"] = json!(96000);
++    e.execute("file.import_aaf", &f.params).unwrap();
++    assert_eq!(e.session().tracks[0].name, "Keep");
++    assert_eq!(e.session().tracks[1].name, "DX");
++    assert_eq!(e.session().tracks[1].clips()[0].start, 144000);
++    assert!(e.session().sources[0].unsaved);
++}
++#[test]
++fn empty_session_adopts_source_clock_and_save_collects_the_whole_source() {
++    let f = Fixture::new();
++    let mut e = Engine::default();
++    e.execute("file.import_aaf", &f.params).unwrap();
++    assert_eq!(e.session().timecode_start, 172800000);
++    assert_eq!(e.session().tracks[0].clips()[0].start, 48000);
++    let dest = f.dir.join("Saved/session.scraft");
++    soundcraft_engine::io::save_session(&mut e, &dest.to_string_lossy()).unwrap();
++    let file = f.dir.join("Saved").join(&e.session().sources[0].path);
++    let info = soundcraft_audio_io::probe(&std::fs::read(file).unwrap(), Some("wav")).unwrap();
++    assert_eq!(info.frames, 480000);
++    assert_eq!(e.session().tracks[0].clips()[0].source_offset(), 96000);
++}
++#[test]
++fn invalid_inputs_fail_without_mutation() {
++    let f = Fixture::new();
++    let mut e = existing();
++    let before = e.session().to_json().unwrap();
++    for update in [
++        json!({"selected":[]}),
++        json!({"selected":[99]}),
++        json!({"selected":[0,0]}),
++        json!({"mapping":"unknown"}),
++        json!({"media":"link"}),
++        json!({"offset_samples":-172900000}),
++    ] {
++        let mut p = f.params.clone();
++        for (k, v) in update.as_object().unwrap() {
++            p[k] = v.clone();
++        }
++        assert!(e.execute("file.import_aaf", &p).is_err());
++        assert_eq!(e.session().to_json().unwrap(), before);
++        assert!(e.undo_label().is_none());
++    }
++    std::fs::remove_file(f.dir.join("Source á with spaces.wav")).unwrap();
++    assert!(e.execute("file.import_aaf", &f.params).is_err());
++    assert_eq!(e.session().to_json().unwrap(), before);
++}
++#[test]
++fn sample_rate_changes_and_confined_media_are_rejected() {
++    let f = Fixture::new();
++    let mut s = Session::new("44.1", SampleRate::HZ_44100);
++    s.add_track(TrackKind::Audio, ChannelFormat::Mono, Some("Existing"));
++    let mut e = Engine::new(s);
++    assert!(e.execute("file.import_aaf", &f.params).unwrap_err().to_string().contains("sample rates differ"));
++    let restricted = f.dir.join("allowed");
++    std::fs::create_dir(&restricted).unwrap();
++    let roots = file_access::AutomationRoots::new(Some(&restricted), None).unwrap();
++    let mut e = existing();
++    assert!(file_access::confine(roots.as_ref(), || e.execute("file.import_aaf", &f.params)).is_err());
++    assert_eq!(e.session().tracks.len(), 1);
++}
++#[test]
++fn playing_import_cannot_bypass_the_transport_guard_with_target_params() {
++    let f = Fixture::new();
++    let mut e = existing();
++    e.transport.playing = true;
++    let mut p = f.params.clone();
++    p["tracks"] = json!([1]);
++    assert!(e.execute("file.import_aaf", &p).is_err());
++    assert_eq!(e.session().tracks.len(), 1);
++}
 +
 +/// A synthetic AAF (two tracks, three edits, chained source offsets) written by pyaaf2. Its
 +/// external WAVs are regenerated here with the same names, layouts and lengths.
@@ -1452,34 +1882,43 @@ literal 0
 HcmV?d00001
 
 diff --git a/crates/interchange/Cargo.toml b/crates/interchange/Cargo.toml
-index 497c0bc..a0e3d5a 100644
---- a/crates/interchange/Cargo.toml
+new file mode 100644
+index 0000000..a0e3d5a
+--- /dev/null
 +++ b/crates/interchange/Cargo.toml
-@@ -14,6 +14,7 @@ soundcraft-audio-io.workspace = true
- serde.workspace = true
- serde_json.workspace = true
- thiserror.workspace = true
+@@ -0,0 +1,20 @@
++[package]
++name = "soundcraft-interchange"
++description = "Rational-time interchange plans and editable session construction"
++version.workspace = true
++edition.workspace = true
++license = "MIT"
++rust-version.workspace = true
++repository.workspace = true
++
++[dependencies]
++soundcraft-model.workspace = true
++soundcraft-time.workspace = true
++soundcraft-audio-io.workspace = true
++serde.workspace = true
++serde_json.workspace = true
++thiserror.workspace = true
 +cfb.workspace = true
- 
- [lints]
- workspace = true
++
++[lints]
++workspace = true
 diff --git a/crates/interchange/README.md b/crates/interchange/README.md
-index 0ada8a0..00b74b2 100644
---- a/crates/interchange/README.md
+new file mode 100644
+index 0000000..00b74b2
+--- /dev/null
 +++ b/crates/interchange/README.md
-@@ -1,10 +1,15 @@
- # Interchange core
- 
- Pure Rust Plan → Session constructor, originally developed in vhhr7/soundcraft_helper.
--No format parser, process, UI or filesystem access. Rational endpoints are converted to
--samples independently; sources retain complete media bounds and clips retain source offsets.
+@@ -0,0 +1,15 @@
++# Interchange core
++
++Pure Rust Plan → Session constructor, originally developed in vhhr7/soundcraft_helper.
 +Rational endpoints are converted to samples independently; sources retain complete media
 +bounds and clips retain source offsets. No processes, UI or filesystem access.
- 
--The AAF engine adapter accepts a configured optional external reader through
--SOUNDCRAFT_AAF_PYTHON and SOUNDCRAFT_AAF_READER. Reader packaging and upstream's
--pure-Rust policy require review; this patch is not a complete bundled AAF release.
--The desktop preview returns an explicit error when the reader is unavailable.
++
 +`aaf` reads a strict subset of AAF (structured storage, via the `cfb` crate) into a Plan:
 +timeline slots of SourceClip/Filler, resolved through MasterMobs to SourceMobs with a
 +WAVEDescriptor and one external file locator. Gain, fades, transitions, selectors, nested
@@ -2413,31 +2852,1005 @@ index 0000000..3f554db
 +    }
 +}
 diff --git a/crates/interchange/src/lib.rs b/crates/interchange/src/lib.rs
-index e8cbc66..15724a5 100644
---- a/crates/interchange/src/lib.rs
+new file mode 100644
+index 0000000..15724a5
+--- /dev/null
 +++ b/crates/interchange/src/lib.rs
-@@ -2,6 +2,8 @@
- //! Readers supply rational seconds. Endpoints are rounded independently (nearest, ties away
- //! from zero), so adjacent edits share exactly the same boundary without cumulative drift.
- #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+@@ -0,0 +1,287 @@
++//! Reusable interchange plan -> SoundCraft session. No processes, UI, or filesystem access.
++//! Readers supply rational seconds. Endpoints are rounded independently (nearest, ties away
++//! from zero), so adjacent edits share exactly the same boundary without cumulative drift.
++#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 +pub mod aaf;
 +
- use serde::{Deserialize, Serialize};
- use soundcraft_model::{ChannelFormat, Clip, ClipId, Session, Source, SourceId, Track, TrackId, TrackKind};
- use soundcraft_time::{FrameRate, MAX_POSITION, SampleRate};
++use serde::{Deserialize, Serialize};
++use soundcraft_model::{ChannelFormat, Clip, ClipId, Session, Source, SourceId, Track, TrackId, TrackKind};
++use soundcraft_time::{FrameRate, MAX_POSITION, SampleRate};
++use std::collections::HashMap;
++
++#[derive(Debug, thiserror::Error)]
++#[error("interchange: {0}")]
++pub struct ImportError(pub String);
++type Result<T> = std::result::Result<T, ImportError>;
++fn invalid(s: &str) -> ImportError {
++    ImportError(s.into())
++}
++
++/// Rational seconds [numerator, denominator]. Both must be nonnegative, denominator > 0.
++#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
++pub struct Rational(pub i64, pub i64);
++impl Rational {
++    pub fn samples(self, hz: u32) -> Result<i64> {
++        if self.0 < 0 || self.1 <= 0 {
++            return Err(invalid("negative time or invalid denominator"));
++        }
++        let n = i128::from(self.0) * i128::from(hz);
++        let d = i128::from(self.1);
++        let v = (n + d / 2) / d;
++        if v > i128::from(MAX_POSITION) {
++            return Err(invalid("time exceeds SoundCraft limit"));
++        }
++        i64::try_from(v).map_err(|_| invalid("time overflow"))
++    }
++}
++#[derive(Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Plan {
++    pub schema_version: u32,
++    pub name: String,
++    pub sample_rate: u32,
++    pub timecode_start: Rational,
++    pub frame_rate: Option<TimecodeRate>,
++    pub sources: Vec<Media>,
++    pub tracks: Vec<ImportTrack>,
++    pub warnings: Vec<String>,
++}
++#[derive(Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct TimecodeRate {
++    pub rate: Rational,
++    pub drop: bool,
++}
++#[derive(Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct Media {
++    pub key: String,
++    pub name: String,
++    pub path: String,
++    pub channels: u16,
++    pub frames: u64,
++    pub sample_rate: u32,
++}
++#[derive(Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ImportTrack {
++    pub name: String,
++    pub channels: u16,
++    pub clips: Vec<ImportClip>,
++}
++#[derive(Debug, Serialize, Deserialize)]
++#[serde(deny_unknown_fields)]
++pub struct ImportClip {
++    pub name: String,
++    pub source: String,
++    pub start: Rational,
++    pub end: Rational,
++    pub offset: Rational,
++}
++#[derive(Debug, Serialize)]
++pub struct HandleReport {
++    pub clip: String,
++    pub before: i64,
++    pub after: i64,
++}
++#[derive(Debug, Serialize)]
++pub struct Report {
++    pub warnings: Vec<String>,
++    pub handles: Vec<HandleReport>,
++}
++pub struct Imported {
++    pub session: Session,
++    pub report: Report,
++}
++
++fn layout(channels: u16) -> Result<ChannelFormat> {
++    match channels {
++        1 => Ok(ChannelFormat::Mono),
++        2 => Ok(ChannelFormat::Stereo),
++        _ => Err(invalid("only mono/stereo supported")),
++    }
++}
++fn name(s: &str) -> Result<()> {
++    if s.chars().count() > soundcraft_model::MAX_NAME_CHARS || s.is_empty() {
++        return Err(invalid("name empty or too long for SoundCraft"));
++    }
++    Ok(())
++}
++fn frame_rate(tc: &TimecodeRate) -> Result<FrameRate> {
++    let Rational(n, d) = tc.rate;
++    if n <= 0 || d <= 0 {
++        return Err(invalid("invalid frame rate"));
++    }
++    FrameRate::ALL
++        .into_iter()
++        .find(|r| {
++            let (rn, rd) = r.rational();
++            i128::from(n) * i128::from(rd) == i128::from(rn) * i128::from(d) && r.is_drop() == tc.drop
++        })
++        .ok_or_else(|| invalid("unsupported frame rate/drop combination"))
++}
++/// Build transactionally. On any error no partial session is returned. The caller must verify
++/// media bytes against the metadata before using the plan; see the CLI for a bounded probe.
++pub fn build_session(plan: Plan) -> Result<Imported> {
++    if plan.schema_version != 1 {
++        return Err(invalid("unsupported interchange schema"));
++    }
++    if plan.sources.len() > 100_000 || plan.tracks.len() > 100_000 || plan.tracks.iter().map(|t| t.clips.len()).sum::<usize>() > 100_000 {
++        return Err(invalid("too many sources/tracks/clips"));
++    }
++    name(&plan.name)?;
++    let sr = SampleRate::new(plan.sample_rate).map_err(|e| ImportError(e.to_string()))?;
++    let mut s = Session::new(&plan.name, sr);
++    s.timecode_start = plan.timecode_start.samples(sr.hz())?;
++    if let Some(tc) = &plan.frame_rate {
++        s.frame_rate = frame_rate(tc)?;
++    }
++    let mut ids = HashMap::new();
++    for m in &plan.sources {
++        name(&m.name)?;
++        layout(m.channels)?;
++        if m.sample_rate != sr.hz() || m.frames == 0 || m.frames > MAX_POSITION as u64 || m.path.is_empty() {
++            return Err(invalid("invalid media metadata or mixed sample rates (resampling unsupported)"));
++        }
++        let id = SourceId(s.alloc());
++        if ids.insert(m.key.as_str(), (id, m.frames, m.channels)).is_some() {
++            return Err(invalid("duplicate source key"));
++        }
++        s.sources.push(Source {
++            id,
++            name: m.name.clone(),
++            path: m.path.clone(),
++            channels: m.channels,
++            frames: m.frames,
++            sample_rate: m.sample_rate,
++            format: soundcraft_audio_io::FileFormat::Wav,
++            time_reference: 0,
++            unsaved: false,
++        });
++    }
++    let mut report = Report { warnings: plan.warnings.clone(), handles: Vec::new() };
++    for t in &plan.tracks {
++        name(&t.name)?;
++        let track_id = TrackId(s.alloc());
++        // Construct directly: add_track intentionally renames duplicates, interchange must not.
++        let mut track = Track::new(track_id, &t.name, TrackKind::Audio, layout(t.channels)?, s.next_track_color());
++        let mut previous_end = 0;
++        for c in &t.clips {
++            name(&c.name)?;
++            let (source, frames, channels) = ids.get(c.source.as_str()).ok_or_else(|| invalid("unknown source key"))?;
++            if *channels != t.channels {
++                return Err(invalid("clip/track layout mismatch"));
++            }
++            let start = c.start.samples(sr.hz())?;
++            let end = c.end.samples(sr.hz())?;
++            let offset = c.offset.samples(sr.hz())?;
++            if end <= start || start < previous_end {
++                return Err(invalid("zero/negative duration or overlapping/out-of-order clips"));
++            }
++            let length = end - start;
++            let source_end = offset.checked_add(length).ok_or_else(|| invalid("source window overflow"))?;
++            if source_end > *frames as i64 {
++                return Err(invalid("clip extends beyond source; refusing truncated handles"));
++            }
++            let clip = Clip::audio(ClipId(s.alloc()), &c.name, *source, offset, start, length);
++            track.playlist_mut().ok_or_else(|| invalid("missing playlist"))?.clips.push(clip);
++            report.handles.push(HandleReport { clip: c.name.clone(), before: offset, after: *frames as i64 - source_end });
++            previous_end = end;
++        }
++        s.tracks.push(track);
++    }
++    s.comments = "Imported by soundcraft-interchange schema v1; see accompanying import report for limitations.".into();
++    Ok(Imported { session: s, report })
++}
++
++#[cfg(test)]
++#[allow(clippy::unwrap_used)]
++mod tests {
++    use super::*;
++    fn plan() -> Plan {
++        Plan {
++            schema_version: 1,
++            name: "Test".into(),
++            sample_rate: 48000,
++            timecode_start: Rational(3600, 1),
++            frame_rate: Some(TimecodeRate { rate: Rational(25, 1), drop: false }),
++            warnings: vec![],
++            sources: vec![Media { key: "s".into(), name: "src".into(), path: "a.wav".into(), channels: 1, frames: 480000, sample_rate: 48000 }],
++            tracks: vec![ImportTrack {
++                name: "DX".into(),
++                channels: 1,
++                clips: vec![ImportClip {
++                    name: "cut".into(),
++                    source: "s".into(),
++                    start: Rational(1, 1),
++                    end: Rational(3, 1),
++                    offset: Rational(2, 1),
++                }],
++            }],
++        }
++    }
++    #[test]
++    fn positions_offsets_handles_and_roundtrip() {
++        let result = build_session(plan()).unwrap();
++        let c = &result.session.tracks[0].clips()[0];
++        assert_eq!((c.start, c.length, c.source_offset()), (48000, 96000, 96000));
++        assert_eq!((result.report.handles[0].before, result.report.handles[0].after), (96000, 288000));
++        assert_eq!(result.session.timecode_start, 172800000);
++        let back = Session::from_json(&result.session.to_json().unwrap()).unwrap();
++        assert_eq!(back.tracks[0].clips()[0], *c);
++    }
++    #[test]
++    fn adjacent_fractional_frame_boundaries_never_drift() {
++        for n in 1..10000 {
++            let a = Rational(n * 1001, 24000).samples(48000).unwrap();
++            let b = Rational((n + 1) * 1001, 24000).samples(48000).unwrap();
++            assert_eq!(b - a, 2002);
++        }
++        assert_eq!(Rational(1, 96000).samples(48000).unwrap(), 1);
++    }
++    #[test]
++    fn fractional_sample_boundaries_use_absolute_endpoints() {
++        let mut p = plan();
++        p.sample_rate = 44100;
++        p.sources[0].sample_rate = 44100;
++        p.sources[0].frames = 4410000;
++        p.tracks[0].clips = (0..1000)
++            .map(|n| ImportClip {
++                name: "frame".into(),
++                source: "s".into(),
++                start: Rational(n * 1001, 24000),
++                end: Rational((n + 1) * 1001, 24000),
++                offset: Rational(n * 1001, 24000),
++            })
++            .collect();
++        let s = build_session(p).unwrap().session;
++        let clips = s.tracks[0].clips();
++        for pair in clips.windows(2) {
++            assert_eq!(pair[0].end(), pair[1].start);
++        }
++        assert_eq!(clips[999].end(), 1839338);
++        assert_eq!(clips.iter().map(|c| c.length).sum::<i64>(), 1839338);
++    }
++    #[test]
++    fn invalid_windows_and_metadata_are_rejected() {
++        let mut p = plan();
++        p.tracks[0].clips[0].offset = Rational(9, 1);
++        assert!(build_session(p).is_err());
++        let mut p = plan();
++        p.sources[0].sample_rate = 44100;
++        assert!(build_session(p).is_err());
++        assert!(Rational(1, 0).samples(48000).is_err());
++        assert!(Rational(i64::MAX, 1).samples(48000).is_err());
++        assert!(Rational(-1, 1).samples(48000).is_err());
++    }
++    #[test]
++    fn stereo_names_and_order_are_preserved() {
++        let mut p = plan();
++        p.sources[0].channels = 2;
++        p.tracks[0].channels = 2;
++        p.tracks.push(ImportTrack { name: "DX".into(), channels: 1, clips: vec![] });
++        let s = build_session(p).unwrap().session;
++        assert_eq!(s.tracks.iter().map(|t| t.name.as_str()).collect::<Vec<_>>(), vec!["DX", "DX"]);
++        assert_eq!(s.tracks[0].channels(), 2);
++    }
++}
 diff --git a/crates/ui-egui/src/aaf_import.rs b/crates/ui-egui/src/aaf_import.rs
-index 858c4db..0651e78 100644
---- a/crates/ui-egui/src/aaf_import.rs
+new file mode 100644
+index 0000000..0651e78
+--- /dev/null
 +++ b/crates/ui-egui/src/aaf_import.rs
-@@ -70,7 +70,7 @@ impl ImportState {
-     }
-     #[cfg(target_arch = "wasm32")]
-     fn analyze(&mut self, _: &egui::Context) {
--        self.error = Some("AAF import is available in the desktop development build".into());
+@@ -0,0 +1,264 @@
++//! Session-data import UI. File parsing goes through engine commands; successful insertion is
++//! a single undoable command. Nothing in this window replaces or saves the active document.
++use crate::SoundApp;
++use egui::{RichText, ScrollArea};
++use serde_json::{Value, json};
++use std::sync::mpsc::{self, Receiver};
++
++pub struct ImportState {
++    pub open: bool,
++    pub path: String,
++    pub media_dir: String,
++    preview: Option<Value>,
++    selected: Vec<bool>,
++    filter: String,
++    absolute: bool,
++    offset: String,
++    error: Option<String>,
++    busy: Option<Receiver<Result<Value, String>>>,
++    pending: bool,
++    report: Option<Value>,
++}
++impl Default for ImportState {
++    fn default() -> Self {
++        Self {
++            open: false,
++            path: String::new(),
++            media_dir: String::new(),
++            preview: None,
++            selected: Vec::new(),
++            filter: String::new(),
++            absolute: true,
++            offset: "0".into(),
++            error: None,
++            busy: None,
++            pending: false,
++            report: None,
++        }
++    }
++}
++impl ImportState {
++    pub fn set_path(&mut self, path: String) {
++        self.media_dir = std::path::Path::new(&path).parent().map_or(String::new(), |p| p.display().to_string());
++        self.path = path;
++        self.preview = None;
++        self.error = None;
++    }
++    pub fn inspect(&self) -> Value {
++        json!({"open":self.open,"path":self.path,"media_dir":self.media_dir,"busy":self.busy.is_some(),"preview":self.preview,"selected":self.selected,"error":self.error,"report":self.report})
++    }
++    #[cfg(not(target_arch = "wasm32"))]
++    fn analyze(&mut self, ctx: &egui::Context) {
++        if self.busy.is_some() {
++            return;
++        }
++        self.error = None;
++        self.preview = None;
++        let path = self.path.clone();
++        let media = self.media_dir.clone();
++        let roots = soundcraft_engine::file_access::current();
++        let ctx = ctx.clone();
++        let (tx, rx) = mpsc::channel();
++        self.busy = Some(rx);
++        std::thread::spawn(move || {
++            let result = soundcraft_engine::file_access::confine(roots.as_ref(), || {
++                soundcraft_engine::Engine::default().execute("file.preview_aaf", &json!({"path":path,"media_dir":media})).map_err(|e| e.to_string())
++            });
++            let _ = tx.send(result);
++            ctx.request_repaint();
++        });
++    }
++    #[cfg(target_arch = "wasm32")]
++    fn analyze(&mut self, _: &egui::Context) {
 +        self.error = Some("AAF import needs the desktop app: its media files are read from a local folder".into());
-     }
++    }
++}
++
++pub fn command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
++    if let Some(path) = p.get("path").and_then(Value::as_str) {
++        app.aaf_import.set_path(path.to_string());
++    }
++    if let Some(dir) = p.get("media_dir").and_then(Value::as_str) {
++        app.aaf_import.media_dir = dir.to_string();
++    }
++    app.aaf_import.open = true;
++    Ok(app.aaf_import.inspect())
++}
++
++pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
++    let mut state = std::mem::take(&mut app.aaf_import);
++    if let Some(rx) = &state.busy {
++        let result = rx.try_recv();
++        match result {
++            Ok(Ok(preview)) => {
++                state.selected = vec![true; preview.get("tracks").and_then(Value::as_array).map_or(0, Vec::len)];
++                state.preview = Some(preview);
++                state.busy = None;
++            }
++            Ok(Err(e)) => {
++                state.error = Some(e);
++                state.busy = None;
++            }
++            Err(mpsc::TryRecvError::Disconnected) => {
++                state.error = Some("AAF reader stopped unexpectedly".into());
++                state.busy = None;
++            }
++            Err(mpsc::TryRecvError::Empty) => {
++                ctx.request_repaint_after(std::time::Duration::from_millis(50));
++            }
++        }
++    }
++    if state.pending {
++        state.pending = false;
++        let indices: Vec<_> = state.selected.iter().enumerate().filter_map(|(i, on)| on.then_some(i)).collect();
++        let params = json!({"plan":state.preview.as_ref().and_then(|v|v.get("plan")),"selected":indices,"media":"copy","mapping":if state.absolute{"absolute"}else{"relative"},"offset_samples":state.offset.parse::<i64>().ok()});
++        match app.run("file.import_aaf", params) {
++            Ok(v) => {
++                state.report = Some(v);
++                state.open = false;
++                app.ui.status = "AAF imported as new editable tracks. Save the session to collect copied media.".into();
++            }
++            Err(e) => state.error = Some(e),
++        }
++    }
++    if state.open {
++        let mut open = true;
++        egui::Window::new("Import Session Data — AAF").id(egui::Id::new("import_aaf")).open(&mut open).default_size([1080.0,690.0]).min_size([850.0,560.0]).show(ctx,|ui| {
++            ui.horizontal(|ui| {
++                ui.label("AAF file");
++                let edited=ui.add_enabled(state.busy.is_none(),egui::TextEdit::singleline(&mut state.path).desired_width((ui.available_width()-200.0).max(200.0))).changed();
++                if edited { state.preview=None; }
++                if ui.add_enabled(state.busy.is_none(),egui::Button::new("Browse…")).clicked()
++                    && let Some(path)=app.services.pick_open.as_ref().and_then(|pick|pick("file.import_aaf",&["aaf"])) { state.set_path(path); }
++                if ui.add_enabled(state.busy.is_none()&&!state.path.is_empty()&&!state.media_dir.is_empty(),egui::Button::new("Analyze AAF")).clicked() { state.analyze(ctx); }
++            });
++            if state.busy.is_some() { ui.horizontal(|ui|{ui.spinner();ui.label("Reading source properties and locating media…");}); }
++            if let Some(error)=&state.error { ui.colored_label(ui.visuals().error_fg_color,error); }
++            ui.separator();
++            let preview=state.preview.clone();
++            ui.horizontal_top(|ui| {
++                ui.vertical(|ui| {
++                    ui.set_width(300.0);
++                    ui.group(|ui| {
++                        ui.label(RichText::new("Source Properties").strong());
++                        if let Some(p)=&preview {
++                            ui.label(format!("Name: {}",p["name"].as_str().unwrap_or("")));
++                            ui.label("Type: AAF • external PCM WAV");
++                            ui.label(format!("Start: {}",p["start_timecode"].as_str().unwrap_or("")));
++                            ui.label(format!("Frame rate: {} fps",p["frame_rate"].as_str().unwrap_or("")));
++                            ui.label(format!("Sample rate: {} Hz",p["sample_rate"]));
++                            ui.label(format!("Source files: {}",p["sources"]));
++                        } else { ui.label("Choose an AAF and analyze it to preview the montage."); }
++                    });
++                    ui.add_space(8.0);
++                    ui.group(|ui| {
++                        ui.label(RichText::new("Media Options").strong());
++                        ui.label("Locate source WAV files in:");
++                        if ui.add_enabled(state.busy.is_none(),egui::TextEdit::singleline(&mut state.media_dir).desired_width(275.0)).changed(){state.preview=None;}
++                        if ui.add_enabled(state.busy.is_none(),egui::Button::new("Choose media folder…")).clicked()
++                            && let Some(dir)=app.services.pick_folder.as_ref().and_then(|pick|pick("AAF source media")){state.media_dir=dir;state.preview=None;}
++                        ui.label("Copy full sources when saving");
++                        ui.small("Save the session before moving or removing original files.");
++                        ui.small("All available handles are retained. Sources are not consolidated or trimmed.");
++                    });
++                    ui.add_space(8.0);
++                    ui.group(|ui| {
++                        ui.label(RichText::new("Timecode Mapping").strong());
++                        ui.radio_value(&mut state.absolute,true,"Maintain absolute timecode");
++                        ui.radio_value(&mut state.absolute,false,"Relative to session start");
++                        ui.horizontal(|ui|{ui.label("Offset (samples)");ui.add(egui::TextEdit::singleline(&mut state.offset).desired_width(110.0));});
++                        ui.small(format!("Destination: {} Hz • {} fps",app.engine.session().sample_rate.hz(),app.engine.session().frame_rate.label()));
++                        ui.small("An empty destination adopts the source rate and timecode. No sample-rate conversion.");
++                    });
++                    ui.add_space(8.0);
++                    ui.label(RichText::new("Initial import scope").strong());
++                    ui.small("New tracks and editable clips. Clip gain, automation, parametric fades, video, plugins and routing are not transferred. Existing playlists are not replaced.");
++                });
++                ui.add_space(12.0);
++                ui.vertical(|ui| {
++                    ui.set_min_width(450.0);
++                    ui.horizontal(|ui|{
++                        ui.label("Tracks");ui.text_edit_singleline(&mut state.filter);
++                        if ui.button("All").clicked(){state.selected.fill(true);}
++                        if ui.button("Clear").clicked(){state.selected.fill(false);}
++                    });
++                    ui.separator();
++                    ScrollArea::vertical().id_salt("aaf_tracks").max_height(400.0).show(ui,|ui| {
++                        egui::Grid::new("aaf_track_table").striped(true).min_col_width(120.0).show(ui,|ui|{
++                            ui.strong("Import / Source");ui.strong("Clips");ui.strong("Destination");ui.end_row();
++                            if let Some(tracks)=preview.as_ref().and_then(|p|p["tracks"].as_array()) {
++                                for (i,t) in tracks.iter().enumerate() {
++                                    let name=t["name"].as_str().unwrap_or("");
++                                    if !name.to_lowercase().contains(&state.filter.to_lowercase()){continue;}
++                                    let label=format!("{} ({})",name,if t["channels"].as_u64()==Some(2){"Stereo"}else{"Mono"});
++                                    if let Some(on)=state.selected.get_mut(i){ui.checkbox(on,label);}else{ui.label(label);}
++                                    ui.label(t["clips"].to_string());ui.label("New Track");ui.end_row();
++                                }
++                            }
++                        });
++                    });
++                    ui.separator();
++                    let warnings=preview.as_ref().and_then(|p|p["warnings"].as_array());
++                    ui.collapsing(format!("Compatibility and media report ({} notices)",warnings.map_or(0,Vec::len)),|ui|{
++                        ScrollArea::vertical().id_salt("aaf_warnings").max_height(130.0).show(ui,|ui|{
++                            if let Some(warnings)=warnings {for w in warnings{ui.small(w.as_str().unwrap_or(""));}}
++                        });
++                    });
++                    ui.label(format!("{} tracks selected",state.selected.iter().filter(|x|**x).count()));
++                });
++            });
++            ui.separator();
++            ui.horizontal(|ui| {
++                if ui.button("Cancel").clicked(){state.open=false;}
++                let ready=state.preview.is_some() && state.busy.is_none() && state.selected.iter().any(|x|*x) && state.offset.parse::<i64>().is_ok() && !app.engine.transport.playing && !app.engine.transport.recording;
++                if ui.add_enabled(ready,egui::Button::new("Import")).clicked(){state.pending=true;ctx.request_repaint();}
++                if app.engine.transport.playing || app.engine.transport.recording {ui.label("Stop transport before importing.");}
++                if state.pending {ui.spinner();ui.label("Preparing media and new tracks…");}
++            });
++        });
++        if !open {
++            state.open = false;
++        }
++    }
++    if let Some(report) = &state.report {
++        let mut open = true;
++        egui::Window::new("AAF Import Report").id(egui::Id::new("aaf_import_report")).open(&mut open).default_size([640.0, 400.0]).show(ctx, |ui| {
++            ui.heading("Session data imported");
++            ui.label(format!("{} new tracks • {} complete sources", report["tracks"].as_array().map_or(0, Vec::len), report["sources"]));
++            ui.label("Clips remain editable. Use Save Session to collect copied media.");
++            if ui.button("Go to first imported clip").clicked()
++                && let Some(at) = report["first_clip_sample"].as_i64()
++            {
++                let _ = app.run("transport.locate", json!({"at":at}));
++            }
++            if ui.button("Copy complete report").clicked() {
++                ctx.copy_text(serde_json::to_string_pretty(report).unwrap_or_default());
++            }
++            ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
++                if let Some(warnings) = report["warnings"].as_array() {
++                    for w in warnings {
++                        ui.label(w.as_str().unwrap_or(""));
++                    }
++                }
++            });
++        });
++        if !open {
++            state.report = None;
++        }
++    }
++    app.aaf_import = state;
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    #[test]
++    fn menu_opens_preview_but_programmatic_import_does_not_open_a_dialog() {
++        let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
++        assert!(app.run("file.import_aaf", json!({})).is_err());
++        assert!(!app.aaf_import.open);
++        crate::menus::invoke_menu(&mut app, "file.import_aaf", "File > Import > Session Data...");
++        assert!(app.aaf_import.open);
++        assert!(app.engine.session().tracks.is_empty());
++    }
++}
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index 3fdd989..e5bb5b2 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -4,6 +4,7 @@
+ //! executing commands. It can be replaced without touching anything below it.
+ #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+ 
++pub mod aaf_import;
+ pub mod bounce;
+ pub mod control;
+ pub mod credits;
+@@ -283,6 +284,7 @@ pub struct SoundApp {
+     pub preset_dir: Option<std::path::PathBuf>,
+     last_autosave: Option<std::time::Instant>,
+     pub dialogs: dialogs::Dialogs,
++    pub aaf_import: aaf_import::ImportState,
+     pub meters: HashMap<TrackId, MeterDisplay>,
+     pub main_meter: MeterDisplay,
+     /// Reused multichannel snapshot; populated at an adaptive rate by `logic`.
+@@ -371,6 +373,7 @@ impl SoundApp {
+             preset_dir: None,
+             last_autosave: None,
+             dialogs: dialogs::Dialogs::default(),
++            aaf_import: aaf_import::ImportState::default(),
+             meters: HashMap::new(),
+             main_meter: MeterDisplay::default(),
+             meter_snapshot: soundcraft_playback::MeterSnapshot::default(),
+@@ -1263,6 +1266,7 @@ impl SoundApp {
+         score_editor::show(self, &ctx);
+         palette::show(self, &ctx);
+         dialogs::show(self, &ctx);
++        aaf_import::show(self, &ctx);
+         // Here, not in logic(): a covered or minimized window runs only logic(), with no vsync to pace it.
+         if self.meters_live() {
+             let hz = if self.ui.window == MainWindow::Mix { 60 } else { 30 };
+diff --git a/crates/ui-egui/src/menus.rs b/crates/ui-egui/src/menus.rs
+index 99e4b50..f8ec1a7 100644
+--- a/crates/ui-egui/src/menus.rs
++++ b/crates/ui-egui/src/menus.rs
+@@ -64,6 +64,7 @@ pub const UI_COMMANDS: &[(&str, &str, &str, Option<&str>)] = &[
+     ("window.time_ops", "Time Operations", "", None),
+     ("window.midi_ops", "MIDI Operations", "", None),
+     ("window.rtp", "MIDI Real-Time Properties", "", None),
++    ("window.import_aaf", "Import Session Data (AAF)", "", None),
+     ("window.playback_engine", "Playback Engine", "", None),
+     ("ui.audio_device", "Audio Device", "", None),
+     ("window.io_setup", "I/O Setup", "", None),
+@@ -433,6 +434,7 @@ fn params_for(path: &str, id: &str) -> Value {
+ /// Menu items that open a SoundCraft window when clicked (programmatic calls still run the command).
+ const MENU_WINDOWS: &[(&str, &str)] = &[
+     ("Setup > Appearance", "window.ui_customization"),
++    ("File > Import > Session Data...", "file.import_aaf"),
+     ("Setup > Hardware...", "window.playback_engine"),
+     ("Setup > Playback Engine...", "window.playback_engine"),
+     ("Setup > I/O...", "window.io_setup"),
+@@ -462,6 +464,10 @@ pub fn live_label(app: &SoundApp, id: Option<&str>) -> Option<String> {
+ 
+ /// Menu-style invocation: may open a dialog.
+ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
++    if id == "file.import_aaf" || path == "File > Import > Session Data..." {
++        let _ = crate::aaf_import::command(app, &json!({}));
++        return;
++    }
+     if let Some((_, w)) = MENU_WINDOWS.iter().find(|(p, _)| *p == path)
+         && w.starts_with("window.")
+     {
+@@ -492,6 +498,10 @@ pub fn invoke_menu(app: &mut SoundApp, id: &str, path: &str) {
+ /// Keyboard shortcut for a dialog command, or one that would close a modified session: open its
+ /// dialog. Returns true when handled.
+ pub fn invoke_shortcut_dialog(app: &mut SoundApp, id: &str) -> bool {
++    if id == "file.import_aaf" {
++        let _ = crate::aaf_import::command(app, &json!({}));
++        return true;
++    }
+     (wants_dialog(id) && app.dialogs.open_for_command(&app.engine, id)) || crate::dialogs::ask_to_save(app, id, &json!({}))
  }
  
+@@ -502,6 +512,9 @@ fn wants_dialog(id: &str) -> bool {
+ 
+ /// Handle UI-layer commands. Returns None when `id` is not a UI command.
+ pub fn run_ui_command(app: &mut SoundApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
++    if id == "window.import_aaf" {
++        return Some(crate::aaf_import::command(app, p));
++    }
+     if matches!(id, "ui.dock" | "ui.dock.reset") {
+         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
+     }
+diff --git a/xtask/src/main.rs b/xtask/src/main.rs
+index 8727c05..56b2910 100644
+--- a/xtask/src/main.rs
++++ b/xtask/src/main.rs
+@@ -28,6 +28,7 @@ const LAYERS: &[(&str, u8)] = &[
+     ("au-host", 1),
+     ("model", 2),
+     ("mix", 3),
++    ("interchange", 3),
+     ("engine", 4),
+     ("playback", 4),
+     ("automation", 5),
+-- 
+2.48.1
+
+
+From 584f8fa2391123245b6fd05be44d8619d780efd8 Mon Sep 17 00:00:00 2001
+From: Vic Herrera <126992509+vhhr7@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 19:42:41 -0500
+Subject: [PATCH 2/4] AAF import: resolve each source once, offer composition
+ choice, start folder picker
+
+- file_source returns early for a known source, so each WAV is probed and
+  each relink is reported once however many edits use it. The per-slot
+  PhysicalTrackNumber check still runs first.
+- When an AAF holds several compositions, the Session Data window lists them
+  and passes the chosen MobID to file.preview_aaf.
+- "Choose media folder..." opens at the current media folder instead of
+  receiving a label as its start path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/engine/tests/aaf_import.rs | 27 ++++++++++++++++
+ crates/interchange/src/aaf.rs     | 32 ++++++++++---------
+ crates/ui-egui/src/aaf_import.rs  | 53 +++++++++++++++++++++++++++++--
+ 3 files changed, 95 insertions(+), 17 deletions(-)
+
+diff --git a/crates/engine/tests/aaf_import.rs b/crates/engine/tests/aaf_import.rs
+index c6fc34e..a5cee65 100644
+--- a/crates/engine/tests/aaf_import.rs
++++ b/crates/engine/tests/aaf_import.rs
+@@ -197,3 +197,30 @@ fn rust_reader_requires_every_locator_in_the_chosen_media_folder() {
+     std::fs::write(f.dir.join("Diálogo á #1.wav"), b"RIFF\0\0\0\0WAVEnot audio").unwrap();
+     assert!(f.preview().is_err());
+ }
++
++#[test]
++fn relinked_sources_are_reported_once_however_many_edits_use_them() {
++    let f = AafFolder::new();
++    let moved = f.dir.join("moved media");
++    std::fs::create_dir(&moved).unwrap();
++    for name in ["Diálogo á #1.wav", "Ambiente estéreo.wav"] {
++        std::fs::rename(f.dir.join(name), moved.join(name)).unwrap();
++    }
++    let aaf = f.dir.join("Montaje sintético.aaf");
++    let preview = Engine::default().execute("file.preview_aaf", &json!({"path": aaf, "media_dir": moved})).unwrap();
++    let relinks = preview["plan"]["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().unwrap().starts_with("Relinked ")).count();
++    // Three edits, two source files: the dialogue source is used twice.
++    assert_eq!(relinks, 2);
++    assert_eq!(preview["plan"]["sources"].as_array().unwrap().len(), 2);
++}
++
++#[test]
++fn an_unknown_composition_id_is_refused() {
++    let f = AafFolder::new();
++    let aaf = f.dir.join("Montaje sintético.aaf");
++    let err = Engine::default()
++        .execute("file.preview_aaf", &json!({"path": aaf, "media_dir": f.dir, "composition": "urn:smpte:umid:00"}))
++        .unwrap_err()
++        .to_string();
++    assert!(err.contains("Choose exactly one composition"), "{err}");
++}
+diff --git a/crates/interchange/src/aaf.rs b/crates/interchange/src/aaf.rs
+index 3f554db..5d2e9ba 100644
+--- a/crates/interchange/src/aaf.rs
++++ b/crates/interchange/src/aaf.rs
+@@ -588,6 +588,14 @@ impl<F: Read + Seek> Builder<'_, F> {
+     }
+ 
+     fn file_source(&mut self, mob: &Obj, slot: &Obj, desc: &Obj, key: String, offset: Q) -> Result<(String, Q)> {
++        // Full interleaved WAV only: selecting one physical channel needs a channel map.
++        if !matches!(slot.opt_u32(PID_SLOT_PHYSICAL, "PhysicalTrackNumber")?, None | Some(0)) {
++            return Err(fail("Physical channel selection / split stereo unsupported"));
++        }
++        // Each source file is located, probed and reported once, however many edits use it.
++        if self.sources.iter().any(|s| s.key == key) {
++            return Ok((key, offset));
++        }
+         let name = mob.string(PID_MOB_NAME);
+         let locators = self.store.vector(desc, PID_DESCRIPTOR_LOCATORS, "locators", false)?;
+         let urls: Vec<String> = locators.iter().map(|l| l.data(PID_URL_STRING).map(utf16).unwrap_or_default()).collect();
+@@ -611,21 +619,15 @@ impl<F: Read + Seek> Builder<'_, F> {
+         if u64::try_from(desc.i64(PID_FILE_LENGTH, "descriptor Length")?).ok() != Some(info.frames) {
+             return Err(fail(format!("Descriptor/file lengths differ: {}", name.unwrap_or_default())));
+         }
+-        // Full interleaved WAV only: selecting one physical channel needs a channel map.
+-        if !matches!(slot.opt_u32(PID_SLOT_PHYSICAL, "PhysicalTrackNumber")?, None | Some(0)) {
+-            return Err(fail("Physical channel selection / split stereo unsupported"));
+-        }
+-        if !self.sources.iter().any(|s| s.key == key) {
+-            let stem = Path::new(&info.path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+-            self.sources.push(Media {
+-                key: key.clone(),
+-                name: name.unwrap_or(stem),
+-                path: info.path,
+-                channels: info.channels,
+-                frames: info.frames,
+-                sample_rate: info.sample_rate,
+-            });
+-        }
++        let stem = Path::new(&info.path).file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
++        self.sources.push(Media {
++            key: key.clone(),
++            name: name.unwrap_or(stem),
++            path: info.path,
++            channels: info.channels,
++            frames: info.frames,
++            sample_rate: info.sample_rate,
++        });
+         Ok((key, offset))
+     }
+ }
+diff --git a/crates/ui-egui/src/aaf_import.rs b/crates/ui-egui/src/aaf_import.rs
+index 0651e78..d615b02 100644
+--- a/crates/ui-egui/src/aaf_import.rs
++++ b/crates/ui-egui/src/aaf_import.rs
+@@ -9,6 +9,10 @@ pub struct ImportState {
+     pub open: bool,
+     pub path: String,
+     pub media_dir: String,
++    /// CompositionMob to read when the AAF holds several; empty lets the reader require one.
++    composition: String,
++    /// (name, MobID) choices reported by the reader for a multi-composition AAF.
++    compositions: Vec<(String, String)>,
+     preview: Option<Value>,
+     selected: Vec<bool>,
+     filter: String,
+@@ -25,6 +29,8 @@ impl Default for ImportState {
+             open: false,
+             path: String::new(),
+             media_dir: String::new(),
++            composition: String::new(),
++            compositions: Vec::new(),
+             preview: None,
+             selected: Vec::new(),
+             filter: String::new(),
+@@ -41,6 +47,8 @@ impl ImportState {
+     pub fn set_path(&mut self, path: String) {
+         self.media_dir = std::path::Path::new(&path).parent().map_or(String::new(), |p| p.display().to_string());
+         self.path = path;
++        self.composition.clear();
++        self.compositions.clear();
+         self.preview = None;
+         self.error = None;
+     }
+@@ -56,13 +64,17 @@ impl ImportState {
+         self.preview = None;
+         let path = self.path.clone();
+         let media = self.media_dir.clone();
++        let mut params = json!({"path":path,"media_dir":media});
++        if !self.composition.is_empty() {
++            params["composition"] = json!(self.composition);
++        }
+         let roots = soundcraft_engine::file_access::current();
+         let ctx = ctx.clone();
+         let (tx, rx) = mpsc::channel();
+         self.busy = Some(rx);
+         std::thread::spawn(move || {
+             let result = soundcraft_engine::file_access::confine(roots.as_ref(), || {
+-                soundcraft_engine::Engine::default().execute("file.preview_aaf", &json!({"path":path,"media_dir":media})).map_err(|e| e.to_string())
++                soundcraft_engine::Engine::default().execute("file.preview_aaf", &params).map_err(|e| e.to_string())
+             });
+             let _ = tx.send(result);
+             ctx.request_repaint();
+@@ -96,6 +108,10 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+                 state.busy = None;
+             }
+             Ok(Err(e)) => {
++                let choices = composition_choices(&e);
++                if !choices.is_empty() {
++                    state.compositions = choices;
++                }
+                 state.error = Some(e);
+                 state.busy = None;
+             }
+@@ -133,6 +149,17 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+                 if ui.add_enabled(state.busy.is_none()&&!state.path.is_empty()&&!state.media_dir.is_empty(),egui::Button::new("Analyze AAF")).clicked() { state.analyze(ctx); }
+             });
+             if state.busy.is_some() { ui.horizontal(|ui|{ui.spinner();ui.label("Reading source properties and locating media…");}); }
++            if !state.compositions.is_empty() {
++                ui.horizontal(|ui| {
++                    ui.label("Composition");
++                    let current=state.compositions.iter().find(|(_,id)|*id==state.composition).map_or("Choose one…".to_string(),|(n,_)|n.clone());
++                    egui::ComboBox::from_id_salt("aaf_composition").selected_text(current).show_ui(ui,|ui|{
++                        for (name,id) in &state.compositions {
++                            if ui.selectable_label(state.composition==*id,format!("{name}  ({id})")).clicked() { state.composition=id.clone(); state.preview=None; }
++                        }
++                    });
++                });
++            }
+             if let Some(error)=&state.error { ui.colored_label(ui.visuals().error_fg_color,error); }
+             ui.separator();
+             let preview=state.preview.clone();
+@@ -156,7 +183,7 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+                         ui.label("Locate source WAV files in:");
+                         if ui.add_enabled(state.busy.is_none(),egui::TextEdit::singleline(&mut state.media_dir).desired_width(275.0)).changed(){state.preview=None;}
+                         if ui.add_enabled(state.busy.is_none(),egui::Button::new("Choose media folder…")).clicked()
+-                            && let Some(dir)=app.services.pick_folder.as_ref().and_then(|pick|pick("AAF source media")){state.media_dir=dir;state.preview=None;}
++                            && let Some(dir)=app.services.pick_folder.as_ref().and_then(|pick|pick(&state.media_dir)){state.media_dir=dir;state.preview=None;}
+                         ui.label("Copy full sources when saving");
+                         ui.small("Save the session before moving or removing original files.");
+                         ui.small("All available handles are retained. Sources are not consolidated or trimmed.");
+@@ -249,10 +276,32 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+     app.aaf_import = state;
+ }
+ 
++/// (name, MobID) pairs from the reader's "Choose exactly one composition" error, so the window
++/// can offer a choice instead of asking for an ID it gives no way to enter.
++fn composition_choices(error: &str) -> Vec<(String, String)> {
++    let Some(list) = error.split_once("Choose exactly one composition by MobID: ").map(|(_, l)| l) else { return Vec::new() };
++    list.split("(\"")
++        .filter_map(|entry| {
++            let (name, rest) = entry.split_once("\", \"")?;
++            let id = rest.split('"').next()?;
++            id.starts_with("urn:smpte:umid:").then(|| (name.to_string(), id.to_string()))
++        })
++        .collect()
++}
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+     #[test]
++    fn several_compositions_become_choices() {
++        let e = r#"io: interchange: Choose exactly one composition by MobID: [("Reel 1", "urn:smpte:umid:060a2b34.01"), ("Alt cut", "urn:smpte:umid:060a2b34.02")]"#;
++        assert_eq!(
++            composition_choices(e),
++            [("Reel 1".to_string(), "urn:smpte:umid:060a2b34.01".to_string()), ("Alt cut".to_string(), "urn:smpte:umid:060a2b34.02".to_string())]
++        );
++        assert!(composition_choices("Missing media: x.wav").is_empty());
++    }
++    #[test]
+     fn menu_opens_preview_but_programmatic_import_does_not_open_a_dialog() {
+         let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+         assert!(app.run("file.import_aaf", json!({})).is_err());
+-- 
+2.48.1
+
+
+From 05c07ff16de1b7b7cc17ed5e29ad927e29a543c8 Mon Sep 17 00:00:00 2001
+From: Vic Herrera <126992509+vhhr7@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 19:56:12 -0500
+Subject: [PATCH 3/4] AAF import: lock the composition selector while analysis
+ runs
+
+A selection change during analysis could leave a plan for the previous
+composition in the window and enable Import with it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/ui-egui/src/aaf_import.rs | 11 +++++++----
+ 1 file changed, 7 insertions(+), 4 deletions(-)
+
+diff --git a/crates/ui-egui/src/aaf_import.rs b/crates/ui-egui/src/aaf_import.rs
+index d615b02..b2d3edc 100644
+--- a/crates/ui-egui/src/aaf_import.rs
++++ b/crates/ui-egui/src/aaf_import.rs
+@@ -153,10 +153,13 @@ pub fn show(app: &mut SoundApp, ctx: &egui::Context) {
+                 ui.horizontal(|ui| {
+                     ui.label("Composition");
+                     let current=state.compositions.iter().find(|(_,id)|*id==state.composition).map_or("Choose one…".to_string(),|(n,_)|n.clone());
+-                    egui::ComboBox::from_id_salt("aaf_composition").selected_text(current).show_ui(ui,|ui|{
+-                        for (name,id) in &state.compositions {
+-                            if ui.selectable_label(state.composition==*id,format!("{name}  ({id})")).clicked() { state.composition=id.clone(); state.preview=None; }
+-                        }
++                    // Locked while analyzing, so a finished analysis always matches the selection.
++                    ui.add_enabled_ui(state.busy.is_none(),|ui|{
++                        egui::ComboBox::from_id_salt("aaf_composition").selected_text(current).show_ui(ui,|ui|{
++                            for (name,id) in &state.compositions {
++                                if ui.selectable_label(state.composition==*id,format!("{name}  ({id})")).clicked() { state.composition=id.clone(); state.preview=None; }
++                            }
++                        });
+                     });
+                 });
+             }
+-- 
+2.48.1
+
+
+From 5e44fa39d14f84f02a0c5922b43abe22b481aa81 Mon Sep 17 00:00:00 2001
+From: Vic Herrera <126992509+vhhr7@users.noreply.github.com>
+Date: Mon, 19 Oct 2026 20:06:57 -0500
+Subject: [PATCH 4/4] AAF import: drop a running analysis when the file or
+ media folder changes
+
+window.import_aaf (and opening an .aaf) can set a new path while the
+previous file is still being analyzed; its late plan could then be shown and
+imported for the new path.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ crates/ui-egui/src/aaf_import.rs | 19 +++++++++++++++++++
+ 1 file changed, 19 insertions(+)
+
+diff --git a/crates/ui-egui/src/aaf_import.rs b/crates/ui-egui/src/aaf_import.rs
+index b2d3edc..20f3116 100644
+--- a/crates/ui-egui/src/aaf_import.rs
++++ b/crates/ui-egui/src/aaf_import.rs
+@@ -49,7 +49,13 @@ impl ImportState {
+         self.path = path;
+         self.composition.clear();
+         self.compositions.clear();
++        self.invalidate();
++    }
++    /// Drops the current preview and any analysis still running, whose plan would belong to the
++    /// previous file or folder. The worker's late result goes to a closed channel.
++    fn invalidate(&mut self) {
+         self.preview = None;
++        self.busy = None;
+         self.error = None;
+     }
+     pub fn inspect(&self) -> Value {
+@@ -92,6 +98,7 @@ pub fn command(app: &mut SoundApp, p: &Value) -> Result<Value, String> {
+     }
+     if let Some(dir) = p.get("media_dir").and_then(Value::as_str) {
+         app.aaf_import.media_dir = dir.to_string();
++        app.aaf_import.invalidate();
+     }
+     app.aaf_import.open = true;
+     Ok(app.aaf_import.inspect())
+@@ -305,6 +312,18 @@ mod tests {
+         assert!(composition_choices("Missing media: x.wav").is_empty());
+     }
+     #[test]
++    fn a_new_file_discards_the_analysis_still_running_for_the_previous_one() {
++        let mut state = ImportState::default();
++        let (tx, rx) = mpsc::channel();
++        state.set_path("/a/first.aaf".into());
++        state.busy = Some(rx);
++        state.set_path("/b/second.aaf".into());
++        assert!(state.busy.is_none());
++        assert!(tx.send(Ok(json!({"plan": {}}))).is_err());
++        assert!(state.preview.is_none());
++        assert_eq!(state.media_dir, "/b");
++    }
++    #[test]
+     fn menu_opens_preview_but_programmatic_import_does_not_open_a_dialog() {
+         let mut app = SoundApp::new(soundcraft_engine::Engine::default(), None, crate::Services::default());
+         assert!(app.run("file.import_aaf", json!({})).is_err());
 -- 
 2.48.1
 

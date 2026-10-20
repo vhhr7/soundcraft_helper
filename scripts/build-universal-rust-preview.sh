@@ -3,12 +3,12 @@
 # The AAF reader is pure Rust inside SoundCraft: no Python runtime, launcher or helper scripts.
 # Ad-hoc signed. Does not notarize, install or publish anything.
 set -eu
-version=0.9.0-aaf.1-dev.3
+version=0.9.0-aaf.1-dev.4
 project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 source_dir=${SOUNDCRAFT_SOURCE_DIR:-"$project_dir/local-build/upstream-contribution"}
 build_dir=${SOUNDCRAFT_BUILD_DIR:-"$project_dir/local-build/release-target"}
 dist_dir="$project_dir/local-build/dist"
-app="$dist_dir/SoundCraft AAF Preview-dev.3.app"
+app="$dist_dir/SoundCraft AAF Preview-dev.4.app"
 dmg="$dist_dir/soundcraft-aaf-preview-$version-macos-universal.dmg"
 if [ -e "$app" ] || [ -e "$dmg" ]; then
     echo 'Output already exists; choose a new version before rebuilding.' >&2
@@ -32,7 +32,7 @@ export CARGO_TARGET_DIR="$build_dir"
 export CARGO_INCREMENTAL=0
 (cd "$source_dir" && cargo +1.95.0 build --locked --release -p soundcraft --target aarch64-apple-darwin --target x86_64-apple-darwin)
 
-work=$(mktemp -d "$dist_dir/work-dev3.XXXXXX")
+work=$(mktemp -d "$dist_dir/work-dev4.XXXXXX")
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources/Notices"
 lipo -create "$build_dir/aarch64-apple-darwin/release/soundcraft" "$build_dir/x86_64-apple-darwin/release/soundcraft" \
     -output "$app/Contents/MacOS/SoundCraft"
@@ -47,7 +47,7 @@ python3 - "$work/Info.plist" "$app/Contents/Info.plist" <<'PY'
 import plistlib,sys
 info=plistlib.load(open(sys.argv[1],'rb'))
 info.update(CFBundleName='SoundCraft AAF Preview',CFBundleDisplayName='SoundCraft AAF Preview',
-            CFBundleIdentifier='net.vicherrera.soundcraft.aaf-preview',CFBundleVersion='4')
+            CFBundleIdentifier='net.vicherrera.soundcraft.aaf-preview',CFBundleVersion='5')
 info.pop('UTExportedTypeDeclarations',None)
 plistlib.dump(info,open(sys.argv[2],'wb'))
 PY

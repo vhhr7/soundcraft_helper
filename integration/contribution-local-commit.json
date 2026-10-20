@@ -1,8 +1,8 @@
 {
-  "commit": "e61391768bac372e2fb08bd5da9dea7b01a536c5",
+  "commit": "5e44fa39d14f84f02a0c5922b43abe22b481aa81",
   "branch": "feat/aaf-session-data",
   "base": "25d52c646aea780c8076ff966076f994ad256221",
-  "published": false,
+  "published": true,
   "checkout": "local-build/upstream-contribution",
   "ci_report": "integration/validation-2026-10-19.json",
   "bundle": "integration/aaf-session-data-rust-reader.bundle",
@@ -11,5 +11,7 @@
     "f8ad3c0083c5414b42719164001ece0a983cfd3a",
     "7cdae4b"
   ],
-  "rust_reader_patch": "integration/rust-reader.patch"
+  "rust_reader_patch": "integration/rust-reader.patch",
+  "pull_request": "https://github.com/storytold/soundcraft/pull/799",
+  "fork_branch": "vhhr7/soundcraft:feat/aaf-session-data"
 }
